@@ -1,0 +1,29 @@
+{
+  "trace_dump": "etm_dump.bin",
+  "prog": "firmware_image.elf",
+  "core": "Cortex-A53",
+  "trace_format": {
+    "source": "frame",
+    "frame_sync": "mem_aligned",
+    "reset_on_4x_fsync": false
+  },
+  "regs": {
+    "TRCCONFIGR": 1801,
+    "TRCTRACEIDR": 1,
+    "TRCIDR0": 134219489,
+    "TRCIDR1": 1090581505,
+    "TRCIDR2": 4,
+    "TRCIDR3": 118030340,
+    "TRCIDR4": 1130496,
+    "TRCIDR5": 2428960770,
+    "TRCIDR6": 0,
+    "TRCIDR7": 0,
+    "TRCIDR8": 0,
+    "TRCIDR9": 0,
+    "TRCIDR10": 0,
+    "TRCIDR11": 0,
+    "TRCIDR12": 1,
+    "TRCIDR13": 0,
+    "TRCAUTHSTATUS": 192
+  }
+}
