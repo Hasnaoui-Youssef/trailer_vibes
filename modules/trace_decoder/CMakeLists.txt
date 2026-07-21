@@ -9,6 +9,7 @@ target_include_directories(trace_decoder PUBLIC
 target_link_libraries(trace_decoder PUBLIC
     config_parser
     trace_sink
+    trace_model
     OpenCSD::opencsd
 )
 

@@ -61,9 +61,43 @@ ocsd_etmv4_cfg ToEtmv4Config(const config::Etmv4Registers &regs, ocsd_arch_versi
 
 std::string MakeError(std::string_view message) { return std::string("trace_decoder: ").append(message); }
 
+// Registers `segments` as file-backed opcode memory for `tree`, reading
+// bytes from `image_path` (the same ELF disasm::ProgramDisassembler loaded
+// them from). Mirrors snapshot_parser's CreateDcdTreeFromSnapShot::
+// processDumpfiles, just driven by PT_LOAD segments instead of Arm
+// Debug/Trace snapshot dump-file entries.
+//
+// A firmware image typically has more than one PT_LOAD segment (e.g. one
+// for .text, another for .data's flash-resident initial values), and
+// OpenCSD only allows *one* accessor to be created per file path: the
+// first region for a given file must go through addBinFileRegionMemAcc,
+// every subsequent region for that same file through
+// updateBinFileRegionMemAcc, or the add call fails outright. Hence the
+// isExistingFileAccessor check on every iteration, exactly as
+// processDumpfiles does.
+ocsd_err_t RegisterMemoryImage(DecodeTree &tree, std::span<const model::LoadSegment> segments,
+                               const std::string &image_path) {
+    for (const model::LoadSegment &segment : segments) {
+        ocsd_file_mem_region_t region{};
+        region.file_offset = static_cast<size_t>(segment.file_offset);
+        region.start_address = static_cast<ocsd_vaddr_t>(segment.vaddr);
+        region.region_size = static_cast<size_t>(segment.size);
+
+        const ocsd_err_t err = TrcMemAccessorFile::isExistingFileAccessor(image_path)
+                                    ? tree.updateBinFileRegionMemAcc(&region, 1, OCSD_MEM_SPACE_ANY, image_path)
+                                    : tree.addBinFileRegionMemAcc(&region, 1, OCSD_MEM_SPACE_ANY, image_path);
+        if (err != OCSD_OK) {
+            return err;
+        }
+    }
+    return OCSD_OK;
+}
+
 }  // namespace
 
-BuildResult DecodeTreeBuilder::Build(const config::PipelineConfig &config, trace::TraceRecordSink &sink) const {
+BuildResult DecodeTreeBuilder::Build(const config::PipelineConfig &config,
+                                     std::span<const model::LoadSegment> segments,
+                                     trace::TraceRecordSink &sink) const {
     BuildResult result;
 
     CoreArchProfileMap arch_profiles;
@@ -84,6 +118,11 @@ BuildResult DecodeTreeBuilder::Build(const config::PipelineConfig &config, trace
 
     if (tree->createMemAccMapper() != OCSD_OK) {
         result.error = MakeError("failed to create memory access mapper");
+        return result;
+    }
+
+    if (RegisterMemoryImage(*tree, segments, config.program_path) != OCSD_OK) {
+        result.error = MakeError("failed to register program image '" + config.program_path + "' as decoder memory");
         return result;
     }
 

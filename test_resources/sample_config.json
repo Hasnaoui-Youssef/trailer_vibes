@@ -1,14 +1,14 @@
 {
   "trace_dump": "etm_dump.bin",
-  "prog": "firmware_image.elf",
-  "core": "Cortex-A53",
+  "prog": "firmware.elf",
+  "core": "Cortex-M7",
   "trace_format": {
     "source": "frame",
     "frame_sync": "mem_aligned",
-    "reset_on_4x_fsync": false
+    "reset_on_4x_fsync": true
   },
   "regs": {
-    "TRCCONFIGR": 1801,
+    "TRCCONFIGR": 9,
     "TRCTRACEIDR": 1,
     "TRCIDR0": 134219489,
     "TRCIDR1": 1090581505,

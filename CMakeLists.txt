@@ -59,21 +59,21 @@ add_subdirectory(modules/snapshot_parser)
 add_subdirectory(modules/trace_sink)
 add_subdirectory(modules/config_parser)
 add_subdirectory(modules/trace_decoder)
+add_subdirectory(modules/trace_model)
+add_subdirectory(modules/disassembler)
+add_subdirectory(modules/instr_reconstruct)
+add_subdirectory(modules/source_correlator)
 
 add_executable(trailer
         src/main.cc
 )
 
-target_compile_options(trailer
-    PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-)
-
-target_include_directories(trailer
-    PRIVATE
-        ${llvm_SOURCE_DIR}/llvm/include
-        ${llvm_BINARY_DIR}/include
-)
+# Deliberately no -fno-rtti here, and no direct LLVM include dirs/libs:
+# trailer touches OpenCSD (which requires RTTI) directly, and reaches LLVM
+# only through disassembler's LLVM-free interface. Compiling this target
+# with default RTTI and linking OpenCSD::opencsd is what the RTTI split in
+# modules/disassembler exists to make safe - see that module's CMakeLists
+# for where -fno-rtti actually lives.
 target_link_libraries(trailer
     PRIVATE
     OpenCSD::opencsd
@@ -81,18 +81,15 @@ target_link_libraries(trailer
     trace_sink
     config_parser
     trace_decoder
-    LLVMDebugInfoDWARF
-    LLVMObject
-    LLVMBinaryFormat
-    LLVMMC
-    LLVMMCParser
-    LLVMSupport
-    LLVMDemangle
-    LLVMTargetParser
-    LLVMMCDisassembler
-    LLVMSymbolize
-    LLVMARMDesc
-    LLVMARMInfo
+    trace_model
+    disassembler
+    instr_reconstruct
+    source_correlator
 )
+
+target_compile_definitions(trailer PRIVATE
+    TRAILER_SAMPLE_CONFIG_PATH="${CMAKE_SOURCE_DIR}/test_resources/sample_config.json"
+)
+
 target_compile_features(trailer PRIVATE cxx_std_20)
 

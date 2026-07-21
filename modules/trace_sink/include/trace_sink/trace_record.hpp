@@ -12,11 +12,14 @@ enum class TraceRecordKind : uint8_t {
     kInstructionRange,
     kException,
     kExceptionReturn,
+    kTraceOn,
+    kNoSync,
 };
 
 // A single decoded execution record kept from the OpenCSD generic trace
-// element stream. Only instruction-range and exception entry/exit elements
-// become records; every other element type is dropped at the sink.
+// element stream. Only instruction-range, exception entry/exit, trace-on,
+// and no-sync elements become records; every other element type is dropped
+// at the sink.
 struct TraceRecord {
     ocsd_trc_index_t index_sop;  // Trace index of the packet that produced this element.
     uint8_t trace_id;            // CoreSight trace ID of the source.
@@ -39,6 +42,15 @@ struct TraceRecord {
 
     // Exception / exception return only.
     uint32_t exception_number;
+
+    // Trace-on only: why tracing (re)started (normal start, overflow
+    // recovery, debug-exit restart). Marks a discontinuity boundary.
+    trace_on_reason_t trace_on_reason;
+
+    // No-sync only: why the decoder is waiting for resync (init, overflow,
+    // bad packet/image, discard, end-of-trace). Marks the start of a gap in
+    // the trace stream.
+    unsync_info_t no_sync_reason;
 };
 
 }  // namespace trace

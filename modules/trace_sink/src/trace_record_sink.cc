@@ -38,6 +38,20 @@ TraceRecord MakeExceptionReturn(const OcsdTraceElement &elem) {
     return record;
 }
 
+TraceRecord MakeTraceOn(const OcsdTraceElement &elem) {
+    TraceRecord record{};
+    record.kind = TraceRecordKind::kTraceOn;
+    record.trace_on_reason = elem.trace_on_reason;
+    return record;
+}
+
+TraceRecord MakeNoSync(const OcsdTraceElement &elem) {
+    TraceRecord record{};
+    record.kind = TraceRecordKind::kNoSync;
+    record.no_sync_reason = elem.unsync_eot_info;
+    return record;
+}
+
 }  // namespace
 
 ocsd_datapath_resp_t TraceRecordSink::TraceElemIn(const ocsd_trc_index_t index_sop,
@@ -54,6 +68,12 @@ ocsd_datapath_resp_t TraceRecordSink::TraceElemIn(const ocsd_trc_index_t index_s
             break;
         case OCSD_GEN_TRC_ELEM_EXCEPTION_RET:
             record = MakeExceptionReturn(elem);
+            break;
+        case OCSD_GEN_TRC_ELEM_TRACE_ON:
+            record = MakeTraceOn(elem);
+            break;
+        case OCSD_GEN_TRC_ELEM_NO_SYNC:
+            record = MakeNoSync(elem);
             break;
         default:
             return OCSD_RESP_CONT;
