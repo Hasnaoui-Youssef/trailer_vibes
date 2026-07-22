@@ -1,23 +1,13 @@
 #ifndef TRAILER_CONFIG_PARSER_CONFIG_PARSER_HPP_
 #define TRAILER_CONFIG_PARSER_CONFIG_PARSER_HPP_
 
-#include <optional>
+#include <expected>
 #include <string>
 #include <string_view>
 
 #include "config_parser/pipeline_config.hpp"
 
 namespace config {
-
-// Result of a configuration parse attempt. On failure `config` is empty and
-// `error` describes what went wrong (offending field, expected type/value)
-// with enough context for an external caller to react to.
-struct ParseResult {
-    std::optional<PipelineConfig> config;
-    std::string error;
-
-    bool Ok() const { return config.has_value(); }
-};
 
 // Configuration-loading pipeline stage. Loads and validates pipeline
 // configuration from external, transport-specific sources and converts it
@@ -46,7 +36,14 @@ public:
     // Etmv4Registers in pipeline_config.hpp). TRCIDR3-7 and TRCAUTHSTATUS
     // are optional and default to 0 when absent. Extra top-level keys are
     // rejected.
-    ParseResult ParseJson(std::string_view path) const;
+    //
+    // `trace_dump` / `prog` are resolved relative to the directory
+    // containing `path` (an absolute value in the config is left as-is).
+    //
+    // On failure, the error string describes what went wrong (offending
+    // field, expected type/value) with enough context for an external
+    // caller to react to.
+    std::expected<PipelineConfig, std::string> ParseJson(std::string_view path) const;
 };
 
 }  // namespace config

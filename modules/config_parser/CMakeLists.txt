@@ -11,4 +11,4 @@ target_link_libraries(config_parser PRIVATE
     nlohmann_json::nlohmann_json
 )
 
-target_compile_features(config_parser PRIVATE cxx_std_20)
+target_compile_features(config_parser PRIVATE cxx_std_23)

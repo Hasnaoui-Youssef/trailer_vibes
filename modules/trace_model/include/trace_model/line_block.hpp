@@ -9,11 +9,16 @@ namespace model {
 
 // A maximal, chronological run of consecutively-executed instructions
 // resolving to the same SourceLocation (same full inline chain, not just
-// the same innermost file:line - see source_correlator). One loop executed
-// N times produces N separate LineBlocks, not one merged block: this
-// preserves per-invocation information (timing, call depth) that later
-// analysis phases need, and a per-line/per-function aggregate view is a
-// cheap projection over this sequence if that's ever wanted instead.
+// the same innermost file:line - see trace_transform's FunctionBlock
+// grouping specialization). One loop executed N times produces N separate
+// LineBlocks, not one merged block: this preserves per-invocation
+// information (timing, call depth) that later analysis phases need, and a
+// per-line/per-function aggregate view is a cheap projection over this
+// sequence if that's ever wanted instead. Locations resolving to an
+// assembly source file are a deliberate exception: they never merge with
+// an adjacent block regardless of location equality, since an assembly
+// line is essentially always exactly one instruction, making the merge
+// uninformative there.
 struct LineBlock {
     SourceLocation location;
 

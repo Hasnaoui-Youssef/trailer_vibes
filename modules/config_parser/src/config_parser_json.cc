@@ -1,6 +1,8 @@
 #include "config_parser/config_parser.hpp"
 
 #include <array>
+#include <expected>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <string>
@@ -14,6 +16,7 @@ namespace config {
 
 namespace {
 
+namespace fs = std::filesystem;
 using Json = nlohmann::json;
 
 constexpr std::string_view kTraceDumpKey = "trace_dump";
@@ -72,74 +75,70 @@ bool FitsUint32(const Json &value) {
 
 }  // namespace
 
-ParseResult ConfigParser::ParseJson(std::string_view path) const {
-    ParseResult result;
+std::expected<PipelineConfig, std::string> ConfigParser::ParseJson(std::string_view path) const {
     const std::string path_str(path);
 
     std::ifstream file(path_str);
     if (!file.is_open()) {
-        result.error = detail::MakeError(path, "failed to open configuration file");
-        return result;
+        return std::unexpected(detail::MakeError(path, "failed to open configuration file"));
     }
 
     Json root = Json::parse(file, /*cb=*/nullptr, /*allow_exceptions=*/false);
     if (root.is_discarded()) {
-        result.error = detail::MakeError(path, "not valid JSON");
-        return result;
+        return std::unexpected(detail::MakeError(path, "not valid JSON"));
     }
     if (!root.is_object()) {
-        result.error = detail::MakeError(path, "root must be a JSON object");
-        return result;
+        return std::unexpected(detail::MakeError(path, "root must be a JSON object"));
     }
 
     for (const auto &[key, value] : root.items()) {
         if (key != kTraceDumpKey && key != kProgKey && key != kCoreKey && key != kTraceFormatKey &&
             key != kRegsKey) {
-            result.error = detail::MakeError(path, "unexpected top-level field '" + key + "'");
-            return result;
+            return std::unexpected(detail::MakeError(path, "unexpected top-level field '" + key + "'"));
         }
     }
 
     PipelineConfig config;
 
+    // Relative trace_dump / prog paths are resolved against the directory
+    // containing the config file itself (not the process's cwd), so the
+    // config remains portable regardless of where the engine is launched
+    // from. fs::path's operator/ leaves an already-absolute RHS untouched,
+    // so an absolute value in the config passes through as-is.
+    const fs::path config_dir = fs::absolute(fs::path(path_str)).parent_path();
+
     if (!root.contains(kTraceDumpKey) || !root[std::string(kTraceDumpKey)].is_string() ||
         root[std::string(kTraceDumpKey)].get<std::string>().empty()) {
-        result.error = detail::MakeError(path, "'trace_dump' must be a non-empty string");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'trace_dump' must be a non-empty string"));
     }
-    config.trace_dump_path = root[std::string(kTraceDumpKey)].get<std::string>();
+    config.trace_dump_path = config_dir / root[std::string(kTraceDumpKey)].get<std::string>();
 
     if (!root.contains(kProgKey) || !root[std::string(kProgKey)].is_string() ||
         root[std::string(kProgKey)].get<std::string>().empty()) {
-        result.error = detail::MakeError(path, "'prog' must be a non-empty string");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'prog' must be a non-empty string"));
     }
-    config.program_path = root[std::string(kProgKey)].get<std::string>();
+    config.program_path = config_dir / root[std::string(kProgKey)].get<std::string>();
 
     if (!root.contains(kCoreKey) || !root[std::string(kCoreKey)].is_string() ||
         root[std::string(kCoreKey)].get<std::string>().empty()) {
-        result.error = detail::MakeError(path, "'core' must be a non-empty string");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'core' must be a non-empty string"));
     }
     config.core_name = root[std::string(kCoreKey)].get<std::string>();
 
     if (!root.contains(kTraceFormatKey) || !root[std::string(kTraceFormatKey)].is_object()) {
-        result.error = detail::MakeError(path, "'trace_format' must be an object");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'trace_format' must be an object"));
     }
     const Json &trace_format = root[std::string(kTraceFormatKey)];
 
     for (const auto &[key, value] : trace_format.items()) {
         if (key != kTraceFormatSourceKey && key != kTraceFormatFrameSyncKey && key != kTraceFormatResetOn4xFsyncKey) {
-            result.error = detail::MakeError(path, "unexpected field 'trace_format." + key + "'");
-            return result;
+            return std::unexpected(detail::MakeError(path, "unexpected field 'trace_format." + key + "'"));
         }
     }
 
     if (!trace_format.contains(kTraceFormatSourceKey) ||
         !trace_format[std::string(kTraceFormatSourceKey)].is_string()) {
-        result.error = detail::MakeError(path, "'trace_format.source' must be a string");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'trace_format.source' must be a string"));
     }
     const std::string source = trace_format[std::string(kTraceFormatSourceKey)].get<std::string>();
     if (source == kSourceFrame) {
@@ -147,15 +146,13 @@ ParseResult ConfigParser::ParseJson(std::string_view path) const {
     } else if (source == kSourceSingle) {
         config.deformatter.source_format = TraceSourceFormat::kSingle;
     } else {
-        result.error = detail::MakeError(path, "'trace_format.source' must be 'frame' or 'single'");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'trace_format.source' must be 'frame' or 'single'"));
     }
 
     config.deformatter.frame_sync = FrameSyncMode::kMemAligned;
     if (trace_format.contains(kTraceFormatFrameSyncKey)) {
         if (!trace_format[std::string(kTraceFormatFrameSyncKey)].is_string()) {
-            result.error = detail::MakeError(path, "'trace_format.frame_sync' must be a string");
-            return result;
+            return std::unexpected(detail::MakeError(path, "'trace_format.frame_sync' must be a string"));
         }
         const std::string frame_sync = trace_format[std::string(kTraceFormatFrameSyncKey)].get<std::string>();
         if (frame_sync == kFrameSyncMemAligned) {
@@ -165,37 +162,32 @@ ParseResult ConfigParser::ParseJson(std::string_view path) const {
         } else if (frame_sync == kFrameSyncHsync) {
             config.deformatter.frame_sync = FrameSyncMode::kHsync;
         } else {
-            result.error =
-                detail::MakeError(path, "'trace_format.frame_sync' must be 'mem_aligned', 'fsync' or 'hsync'");
-            return result;
+            return std::unexpected(
+                detail::MakeError(path, "'trace_format.frame_sync' must be 'mem_aligned', 'fsync' or 'hsync'"));
         }
     }
 
     config.deformatter.reset_on_4x_fsync = false;
     if (trace_format.contains(kTraceFormatResetOn4xFsyncKey)) {
         if (!trace_format[std::string(kTraceFormatResetOn4xFsyncKey)].is_boolean()) {
-            result.error = detail::MakeError(path, "'trace_format.reset_on_4x_fsync' must be a boolean");
-            return result;
+            return std::unexpected(detail::MakeError(path, "'trace_format.reset_on_4x_fsync' must be a boolean"));
         }
         config.deformatter.reset_on_4x_fsync = trace_format[std::string(kTraceFormatResetOn4xFsyncKey)].get<bool>();
     }
 
     if (!root.contains(kRegsKey) || !root[std::string(kRegsKey)].is_object()) {
-        result.error = detail::MakeError(path, "'regs' must be an object");
-        return result;
+        return std::unexpected(detail::MakeError(path, "'regs' must be an object"));
     }
     const Json &regs = root[std::string(kRegsKey)];
 
     for (const auto &[reg_name, member] : kRequiredRegisterFields) {
         if (!regs.contains(reg_name)) {
-            result.error = detail::MakeError(path, "'regs' is missing register '" + std::string(reg_name) + "'");
-            return result;
+            return std::unexpected(detail::MakeError(path, "'regs' is missing register '" + std::string(reg_name) + "'"));
         }
         const Json &value = regs[std::string(reg_name)];
         if (!FitsUint32(value)) {
-            result.error =
-                detail::MakeError(path, "'regs." + std::string(reg_name) + "' must be a 32-bit unsigned integer");
-            return result;
+            return std::unexpected(
+                detail::MakeError(path, "'regs." + std::string(reg_name) + "' must be a 32-bit unsigned integer"));
         }
         config.regs.*member = value.get<uint32_t>();
     }
@@ -207,15 +199,13 @@ ParseResult ConfigParser::ParseJson(std::string_view path) const {
         }
         const Json &value = regs[std::string(reg_name)];
         if (!FitsUint32(value)) {
-            result.error =
-                detail::MakeError(path, "'regs." + std::string(reg_name) + "' must be a 32-bit unsigned integer");
-            return result;
+            return std::unexpected(
+                detail::MakeError(path, "'regs." + std::string(reg_name) + "' must be a 32-bit unsigned integer"));
         }
         config.regs.*member = value.get<uint32_t>();
     }
 
-    result.config = std::move(config);
-    return result;
+    return config;
 }
 
 }  // namespace config

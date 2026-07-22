@@ -2,6 +2,7 @@
 #define TRAILER_CONFIG_PARSER_PIPELINE_CONFIG_HPP_
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace config {
@@ -59,9 +60,14 @@ struct Etmv4Registers {
 
 // Output of the configuration-loading pipeline stage: everything later
 // stages need to locate the trace/program inputs and build a decoder.
+//
+// trace_dump_path / program_path are resolved (by ConfigParser::ParseJson)
+// against the directory containing the config file itself, not the
+// process's current working directory: a relative path in a config is
+// relative to that config, wherever the engine happens to be launched from.
 struct PipelineConfig {
-    std::string trace_dump_path;
-    std::string program_path;
+    std::filesystem::path trace_dump_path;
+    std::filesystem::path program_path;
     // CoreSight core name (e.g. "Cortex-A53"), used to resolve the ETMv4
     // architecture version and core profile.
     std::string core_name;

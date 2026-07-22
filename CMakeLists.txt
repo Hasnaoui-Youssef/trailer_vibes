@@ -61,8 +61,7 @@ add_subdirectory(modules/config_parser)
 add_subdirectory(modules/trace_decoder)
 add_subdirectory(modules/trace_model)
 add_subdirectory(modules/disassembler)
-add_subdirectory(modules/instr_reconstruct)
-add_subdirectory(modules/source_correlator)
+add_subdirectory(modules/trace_transform)
 
 add_executable(trailer
         src/main.cc
@@ -83,13 +82,12 @@ target_link_libraries(trailer
     trace_decoder
     trace_model
     disassembler
-    instr_reconstruct
-    source_correlator
+    trace_transform
 )
 
 target_compile_definitions(trailer PRIVATE
     TRAILER_SAMPLE_CONFIG_PATH="${CMAKE_SOURCE_DIR}/test_resources/sample_config.json"
 )
 
-target_compile_features(trailer PRIVATE cxx_std_20)
+target_compile_features(trailer PRIVATE cxx_std_23)
 

@@ -31,6 +31,15 @@ target_link_libraries(disassembler
         LLVMARMInfo
         LLVMARMDisassembler
         LLVMARMUtils
+        # DWARF/source-correlation support, absorbed from the now-deleted
+        # source_correlator module - this is now the engine's only ELF/DWARF
+        # owner.
+        LLVMDebugInfoDWARF
+        LLVMDebugInfoDWARFLowLevel
+        LLVMBitReader
+        LLVMCore
+        LLVMIRReader
+        LLVMTextAPI
 )
 
 # This is the RTTI boundary: LLVM is built with its default -fno-rtti, but
@@ -41,6 +50,6 @@ target_compile_options(disassembler PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
 )
 
-target_compile_features(disassembler PRIVATE cxx_std_20)
+target_compile_features(disassembler PRIVATE cxx_std_23)
 
 add_subdirectory(test)

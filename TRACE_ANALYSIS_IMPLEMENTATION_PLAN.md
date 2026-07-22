@@ -23,49 +23,77 @@ Phases are ordered by priority, each building on the previous one's output:
 
 ### Phase 1 as built
 
-The two-stage split played out as designed, plus one addition the RTTI
-boundary required: LLVM and OpenCSD can never coexist in one translation
-unit, so *both* the disassembly stage and the DWARF stage ended up as
-independent `-fno-rtti` LLVM-side modules, bridged back to OpenCSD-side
-code only through the dependency-free `trace_model` types.
+The two-stage split (LLVM side vs. OpenCSD side, forced by the RTTI
+boundary - LLVM and OpenCSD can never coexist in one translation unit)
+still holds, but the module boundaries within each side were reworked once
+real usage showed the original three-module split (`disassembler` +
+`instr_reconstruct` + `source_correlator`) was both duplicating an ELF load
+and doing on-demand LLVM/DWARF work where a full upfront precompute is
+trivially cheap for embedded-sized firmware. Current shape:
 
 - **`trace_model/`** — header-only, zero-dependency vocabulary shared
   across the RTTI boundary: `InstructionSet`, `DecodedInstruction`,
-  `LoadSegment`, `ReconstructedInstruction`, `InlineFrame`,
-  `SourceLocation`, `LineBlock`, `FunctionBlock`.
-- **`disassembler/`** (Instruction Reconstruction, LLVM side, `-fno-rtti`) —
-  `disasm::ProgramDisassembler`. Loads the ELF once, extracts PT_LOAD
-  segments, disassembles Thumb/ARM ranges into `DecodedInstruction`s with
-  control-flow classification (call/return/indirect/conditional, resolved
-  direct-branch targets). Includes a `LooksLikeReturn` heuristic for
-  `bx lr` / `pop {...,pc}`, since LLVM's own `MCInstrAnalysis::isReturn()`
-  only recognizes a CodeGen-only pseudo the disassembler never produces.
-- **`instr_reconstruct/`** (OpenCSD side, default RTTI) —
-  `reconstruct::Reconstruct`. Bridges `TraceRecord` instruction ranges to
-  `ProgramDisassembler`, honoring `TraceRecord::last_instr_executed`.
-- **`source_correlator/`** (Execution Analysis, LLVM side, `-fno-rtti`) —
-  `correlate::SourceCorrelator`. Independently loads the same ELF and
-  builds an LLVM `DWARFContext`; `Resolve()` gives the full inline-frame
-  chain for one address, `Correlate()` walks a `ReconstructedInstruction`
-  stream into chronological `FunctionBlock`s (each holding its own
-  chronological `LineBlock`s). Line blocks split on the *full* inline
-  chain, not just the innermost file:line (confirmed with the user - two
-  different inlined call sites stay distinct even if their bodies land on
-  the same line); function blocks are a merge over adjacent line blocks
-  sharing an outermost (real, non-inlined) function, not a second,
-  independent pass.
+  `InstructionInfo`, `LoadSegment`, `ReconstructedInstruction`,
+  `InlineFrame`, `SourceLocation`, `LineBlock`, `FunctionBlock`.
+- **`disassembler/`** (LLVM side, `-fno-rtti`) — `disasm::ProgramDisassembler`,
+  the engine's **single source of truth** for everything statically knowable
+  about an instruction's address. Loads the ELF once (the *only* ELF/DWARF
+  load in the engine - `source_correlator` as a separate module is gone),
+  extracts PT_LOAD segments, and at `Create()` time precomputes, for the
+  *whole* image, both disassembly (mnemonic/operands/bytes/control-flow
+  classification, including a `LooksLikeReturn` heuristic for `bx lr`/
+  `pop {...,pc}` since LLVM's own `MCInstrAnalysis::isReturn()` only
+  recognizes a CodeGen-only pseudo the disassembler never produces) *and*
+  DWARF source correlation (full inline-frame chain) into one
+  `model::InstructionInfo` per address, queried thereafter only via
+  `InstructionInfoAt(address)`. Precomputation walks each executable
+  section's ARM mapping symbols (`$a`/`$t`/`$d`) rather than linear-sweeping
+  it, so Thumb literal pools embedded in `.text` (confirmed present in the
+  real firmware via `readelf -sW`) are skipped as data, never decoded as
+  bogus instructions.
+- **`trace_transform/`** (OpenCSD side, default RTTI, header-only) — the
+  formalized replacement for both `instr_reconstruct` and
+  `source_correlator`'s grouping logic. `xform::TraceTransform<T>` is a
+  customization point (a class template left undefined, specialized per
+  output type `T`) driving one uniform entry point,
+  `xform::Transform<T>(records, args...)`: "give me a `vector<T>` built from
+  these `TraceRecord`s," where *how* - one-to-one, one-to-many, needing
+  extra context (a `Resolve` callable wrapping `InstructionInfoAt`) - is
+  entirely up to `T`'s specialization. A `TransformableFrom` concept makes
+  calling `Transform` for an unspecialized `T` fail immediately and
+  readably at the call site. Two specializations exist today:
+  `TraceTransform<ReconstructedInstruction>` (the expansion step, honoring
+  `TraceRecord::last_instr_executed`) and `TraceTransform<FunctionBlock>`
+  (the grouping step, composing over the first rather than re-walking
+  records). Line blocks split on the *full* inline chain, not just the
+  innermost file:line (confirmed with the user - two different inlined
+  call sites stay distinct even if their bodies land on the same line);
+  function blocks are a merge over adjacent line blocks sharing an
+  outermost (real, non-inlined) function. Locations resolving to an
+  assembly source file are a deliberate exception to line-block merging:
+  they never merge regardless of location equality, since an assembly line
+  is essentially always exactly one instruction. Future stages (Phase 2
+  replay state, Phase 3 MMIO-annotated traces) become new
+  `TraceTransform<T>` specializations, not modifications to existing ones
+  (Architectural Rules 7, 8).
 - **`main.cc`** wires all of this into a real driver and prints both views
   (per-instruction with resolved location, and the FunctionBlock/LineBlock
-  summary) - verified against the project's actual STM32H7 capture, not
-  just synthetic fixtures: correctly resolves real HAL source locations
-  (`startup_stm32h7s3xx.s`, `system_stm32h7rsxx.c`), and the `.data`
-  copy-loop's line blocks show the expected one-block-per-iteration
-  pattern.
+  summary) via `xform::Transform<ReconstructedInstruction>`/
+  `xform::Transform<FunctionBlock>` - verified against the project's actual
+  STM32H7 capture, not just synthetic fixtures: correctly resolves real HAL
+  source locations (`startup_stm32h7s3xx.s`, `system_stm32h7rsxx.c`), and
+  the `.data` copy-loop's line blocks show the expected
+  one-block-per-iteration pattern.
 
-Both new LLVM-side modules have deterministic unit tests against small,
-committed, purpose-built fixtures (`disassembler/test/fixture.elf` /
-`.s`, `source_correlator/test/fixture.elf` / `.c` - the latter compiled
-with forced inlining specifically to exercise the full-inline-chain case).
+`disassembler` has deterministic unit tests against small, committed,
+purpose-built fixtures (`fixture.elf`/`.s` - no debug info, control-flow
+classification; `dwarf_fixture.elf`/`.c` - real DWARF with forced inlining,
+source-location resolution) plus a regression check against the real
+firmware confirming the mapping-symbol-guided precompute correctly skips a
+known literal-pool address. `trace_transform` has deterministic unit tests
+driven entirely by a hand-built in-memory instruction table - no ELF/LLVM
+involved at all, since `TraceTransform<T>` depends only on `trace_model` +
+`trace_sink`.
 
 ---
 

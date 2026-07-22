@@ -1,5 +1,5 @@
 add_library(trace_decoder
-        src/decode_tree_builder.cc
+        src/trace_decoder.cc
 )
 
 target_include_directories(trace_decoder PUBLIC
@@ -13,6 +13,6 @@ target_link_libraries(trace_decoder PUBLIC
     OpenCSD::opencsd
 )
 
-target_compile_features(trace_decoder PRIVATE cxx_std_20)
+target_compile_features(trace_decoder PRIVATE cxx_std_23)
 
 add_subdirectory(test)
