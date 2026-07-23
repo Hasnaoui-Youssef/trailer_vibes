@@ -8,10 +8,12 @@ target_include_directories(disassembler PUBLIC
 
 # LLVM headers are a private implementation detail: nothing in this
 # module's public interface (program_disassembler.hpp) names an LLVM type,
-# so consumers never need this include path.
+# so consumers never need this include path. ${LLVM_INCLUDE_DIRS} comes
+# from the top-level find_package(LLVM CONFIG) - see the root CMakeLists
+# for why LLVM is a system-installed dependency rather than built from
+# source.
 target_include_directories(disassembler PRIVATE
-    ${llvm_SOURCE_DIR}/llvm/include
-    ${llvm_BINARY_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
 )
 
 target_link_libraries(disassembler

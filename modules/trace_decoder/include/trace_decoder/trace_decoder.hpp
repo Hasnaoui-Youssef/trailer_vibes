@@ -6,18 +6,18 @@
 #include <string>
 #include <vector>
 
-#include "config_parser/pipeline_config.hpp"
+#include "trace_decoder/instruction_trace_decode_config.hpp"
 #include "trace_model/load_segment.hpp"
 #include "trace_sink/trace_record.hpp"
 
 namespace decode {
 
-// Decoding pipeline stage: turns a config::PipelineConfig plus a firmware
-// image's trace bytes into the flat TraceRecord stream OpenCSD's ETMv4
-// decoder produces from them. Every OpenCSD detail (DecodeTree
-// construction/lifetime, the ITrcGenElemIn sink, TraceDataIn chunking,
-// datapath response codes) is private to this stage: a caller drives
-// nothing beyond calling Decode() and never sees an OpenCSD type.
+// Decoding pipeline stage: turns an InstructionTraceDecodeConfig into the
+// flat TraceRecord stream OpenCSD's ETMv4 decoder produces from it. Every
+// OpenCSD detail (DecodeTree construction/lifetime, the ITrcGenElemIn sink,
+// TraceDataIn chunking, datapath response codes) is private to this stage:
+// a caller drives nothing beyond calling Decode() and never sees an
+// OpenCSD type.
 //
 // Decode() is a value stage, not a resource holder: on success it returns
 // the completed TraceRecord vector by value and is done - it does not
@@ -28,25 +28,25 @@ namespace decode {
 // decoder itself.
 class TraceDecoder {
 public:
-    // Builds a decode tree for `config`, feeds it the bytes at
-    // config.trace_dump_path, and returns the resulting TraceRecords.
+    // Builds a decode tree for `config`, feeds it config.trace_data(), and
+    // returns the resulting TraceRecords.
     //
     // `segments` are the firmware image's PT_LOAD regions (as extracted by
     // disasm::ProgramDisassembler::load_segments()); each is registered
     // with the decode tree's memory accessor so the ETMv4 decoder can read
-    // opcode bytes from config.program_path when resolving instruction
+    // opcode bytes from config.program_path() when resolving instruction
     // ranges. May be empty (e.g. in tests that only exercise decoder
     // construction), in which case decoding still runs but any real trace
     // fed to it will fail to resolve instruction ranges for lack of memory
     // access.
     //
-    // On failure (tree/decoder construction failed, the trace dump
-    // couldn't be read, or decoding hit a fatal datapath response), the
-    // error string explains what went wrong. A non-fatal
-    // warning/error datapath response is logged to stderr but still
-    // yields a successful result, matching this stage's previous policy.
+    // On failure (tree/decoder construction failed, or decoding hit a
+    // fatal datapath response), the error string explains what went wrong.
+    // A non-fatal warning/error datapath response is logged to stderr but
+    // still yields a successful result, matching this stage's previous
+    // policy.
     std::expected<std::vector<trace::TraceRecord>, std::string> Decode(
-        const config::PipelineConfig &config, std::span<const model::LoadSegment> segments) const;
+        const InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments) const;
 };
 
 }  // namespace decode

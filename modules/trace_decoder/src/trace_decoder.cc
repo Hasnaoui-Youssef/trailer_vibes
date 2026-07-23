@@ -2,10 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <utility>
 
 #include <opencsd.h>
@@ -15,10 +14,6 @@
 namespace decode {
 
 namespace {
-
-using config::DeformatterConfig;
-using config::FrameSyncMode;
-using config::TraceSourceFormat;
 
 // Frees a DecodeTree created via DecodeTree::CreateDecodeTree. Private to
 // this translation unit: DecodeTree never crosses TraceDecoder's public
@@ -61,7 +56,7 @@ uint32_t ToFormatterFlags(const DeformatterConfig &deformatter) {
     return flags;
 }
 
-ocsd_etmv4_cfg ToEtmv4Config(const config::Etmv4Registers &regs, ocsd_arch_version_t arch_ver,
+ocsd_etmv4_cfg ToEtmv4Config(const Etmv4Registers &regs, ocsd_arch_version_t arch_ver,
                               ocsd_core_profile_t core_prof) {
     ocsd_etmv4_cfg cfg{};
     cfg.reg_configr = regs.trcconfigr;
@@ -114,30 +109,10 @@ ocsd_err_t RegisterMemoryImage(DecodeTree &tree, std::span<const model::LoadSegm
     return OCSD_OK;
 }
 
-// Reads `path` fully into memory. Trace dumps in this project's test
-// vectors are small (single-capture-session ETM dumps); a streaming reader
-// would be the right move if that stops being true.
-bool ReadFile(const std::filesystem::path &path, std::vector<uint8_t> &out) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return false;
-    }
-    const std::streamsize size = file.tellg();
-    if (size < 0) {
-        return false;
-    }
-    out.resize(static_cast<size_t>(size));
-    file.seekg(0);
-    if (size > 0 && !file.read(reinterpret_cast<char *>(out.data()), size)) {
-        return false;
-    }
-    return true;
-}
-
 // Feeds `data` through `tree` in fixed-size chunks (mirrors OpenCSD's own
 // mem_buff_demo sample), then signals end-of-trace so buffered elements
 // flush out. Returns the final datapath response.
-ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, const std::vector<uint8_t> &data) {
+ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, std::span<const uint8_t> data) {
     constexpr uint32_t kChunkSize = 4096;
 
     ocsd_datapath_resp_t resp = OCSD_RESP_CONT;
@@ -168,15 +143,15 @@ ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, const std::vector<uint8_t> 
 }  // namespace
 
 std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode(
-    const config::PipelineConfig &config, std::span<const model::LoadSegment> segments) const {
+    const InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments) const {
     CoreArchProfileMap arch_profiles;
-    const ocsd_arch_profile_t arch_profile = arch_profiles.getArchProfile(config.core_name);
+    const ocsd_arch_profile_t arch_profile = arch_profiles.getArchProfile(config.core_name());
     if (arch_profile.arch == ARCH_UNKNOWN) {
-        return std::unexpected(MakeError("unrecognized core name '" + config.core_name + "'"));
+        return std::unexpected(MakeError("unrecognized core name '" + config.core_name() + "'"));
     }
 
-    const ocsd_dcd_tree_src_t src_format = ToSourceFormat(config.deformatter.source_format);
-    const uint32_t formatter_flags = ToFormatterFlags(config.deformatter);
+    const ocsd_dcd_tree_src_t src_format = ToSourceFormat(config.deformatter().source_format);
+    const uint32_t formatter_flags = ToFormatterFlags(config.deformatter());
 
     DecodeTreePtr tree(DecodeTree::CreateDecodeTree(src_format, formatter_flags));
     if (tree == nullptr) {
@@ -187,12 +162,12 @@ std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode
         return std::unexpected(MakeError("failed to create memory access mapper"));
     }
 
-    const std::string program_path = config.program_path.string();
+    const std::string program_path = config.program_path().string();
     if (RegisterMemoryImage(*tree, segments, program_path) != OCSD_OK) {
         return std::unexpected(MakeError("failed to register program image '" + program_path + "' as decoder memory"));
     }
 
-    const ocsd_etmv4_cfg etmv4_cfg = ToEtmv4Config(config.regs, arch_profile.arch, arch_profile.profile);
+    const ocsd_etmv4_cfg etmv4_cfg = ToEtmv4Config(config.registers(), arch_profile.arch, arch_profile.profile);
     EtmV4Config config_obj(&etmv4_cfg);
 
     if (tree->createDecoder(OCSD_BUILTIN_DCD_ETMV4I, OCSD_CREATE_FLG_FULL_DECODER, &config_obj) != OCSD_OK) {
@@ -202,12 +177,7 @@ std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode
     trace::TraceRecordSink sink;
     tree->setGenTraceElemOutI(&sink);
 
-    std::vector<uint8_t> trace_data;
-    if (!ReadFile(config.trace_dump_path, trace_data)) {
-        return std::unexpected(MakeError("failed to read trace dump '" + config.trace_dump_path.string() + "'"));
-    }
-
-    const ocsd_datapath_resp_t decode_resp = FeedTraceData(*tree, trace_data);
+    const ocsd_datapath_resp_t decode_resp = FeedTraceData(*tree, config.trace_data());
     if (OCSD_DATA_RESP_IS_FATAL(decode_resp)) {
         return std::unexpected(
             MakeError("decode failed with fatal datapath response " + std::to_string(static_cast<int>(decode_resp))));

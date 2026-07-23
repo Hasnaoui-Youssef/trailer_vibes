@@ -132,7 +132,7 @@ Analysis").
 `modules/instr_reconstruct/`)
 
 - Input: `std::vector<TraceRecord>` + the loaded program image (ELF, already
-  at `PipelineConfig::program_path`).
+  at `InstructionTraceDecodeConfig::program_path()`).
 - For each `kInstructionRange` record: read raw bytes at `start_addr` from
   the ELF's loaded segments, and disassemble forward with LLVM's MC layer
   (`MCDisassembler`), selecting ARM/Thumb/AArch64 decode mode from
@@ -230,9 +230,9 @@ Analysis").
 
 ### Dependencies
 
-None beyond what's already in the pipeline (`config_parser`'s
-`program_path`, `trace_sink`'s `TraceRecord` vector). This is the foundation
-phase 2–4 build on.
+None beyond what's already in the pipeline (`trace_decoder`'s
+`InstructionTraceDecodeConfig::program_path()`, `trace_sink`'s `TraceRecord`
+vector). This is the foundation phase 2–4 build on.
 
 ---
 
@@ -358,10 +358,11 @@ of this phase.
 - Input vector keyed by peripheral+register (from SVD) or, once Phase 1
   exists, by source location ("the `adc_read()` call at `foo.c:42`") plus an
   occurrence index (1st/2nd/nth read at that site).
-- Config extension needed: `PipelineConfig` gains something like a list of
-  `{peripheral_register_or_address, occurrence_index, value}` entries —
-  natural fit as a new field on the existing config model rather than a new
-  transport.
+- Config extension needed: `InstructionTraceDecodeConfig` gains something
+  like a list of `{peripheral_register_or_address, occurrence_index, value}`
+  entries, set via a new `Builder` setter — natural fit as a new field on
+  the existing config model; there's no parsing/transport layer to extend,
+  since whoever assembles the pipeline constructs the config directly.
 - A **constraints list**, per the user's own framing, is still useful even
   in Mode A: not to pick branches (the trace already did), but to assert
   *expected* properties of the reconstructed values ("this variable should

@@ -1,6 +1,6 @@
-// Trailer engine driver: config -> disassemble (+ precompute source
-// correlation) -> decode -> transform into the views this provisional
-// listing wants.
+// Trailer engine driver: build a decode config -> disassemble (+ precompute
+// source correlation) -> decode -> transform into the views this
+// provisional listing wants.
 //
 // This is a provisional listing, not the engine's final serialization
 // format: it exists to exercise the pipeline built so far end to end on
@@ -13,6 +13,12 @@
 // Orchestrator can drive the same calls from a declarative description
 // without this file's shape changing.
 //
+// There is no config parsing here: decode::InstructionTraceDecodeConfig is
+// built directly, the same way the real orchestrator (DAP layer for the
+// program path, OpenOCD TCL client for ETM registers and trace bytes) will
+// build one - main() just hardcodes the values that orchestrator would
+// have supplied, matching test_resources' known-good sample capture.
+//
 // Per CLAUDE.md: stdout carries only this machine-readable listing;
 // everything else (progress, warnings, errors) goes to stderr.
 //
@@ -23,15 +29,19 @@
 // entirely private to disasm::ProgramDisassembler, precomputed once and
 // queried here only via InstructionInfoAt.
 
+#include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <print>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "config_parser/config_parser.hpp"
 #include "disassembler/program_disassembler.hpp"
+#include "trace_decoder/instruction_trace_decode_config.hpp"
 #include "trace_decoder/trace_decoder.hpp"
 #include "trace_model/function_block.hpp"
 #include "trace_model/reconstructed_instruction.hpp"
@@ -40,8 +50,11 @@
 #include "trace_transform/reconstructed_instruction_transform.hpp"
 #include "trace_transform/transform.hpp"
 
-#ifndef TRAILER_SAMPLE_CONFIG_PATH
-#error "TRAILER_SAMPLE_CONFIG_PATH must be defined by the build"
+#ifndef TRAILER_SAMPLE_ELF_PATH
+#error "TRAILER_SAMPLE_ELF_PATH must be defined by the build"
+#endif
+#ifndef TRAILER_SAMPLE_TRACE_DUMP_PATH
+#error "TRAILER_SAMPLE_TRACE_DUMP_PATH must be defined by the build"
 #endif
 
 namespace {
@@ -49,6 +62,61 @@ namespace {
 int Fail(const std::string &message) {
     std::println(stderr, "trailer: {}", message);
     return EXIT_FAILURE;
+}
+
+// Reads `path` fully into memory. Trace dumps in this project's test
+// vectors are small (single-capture-session ETM dumps); a streaming reader
+// would be the right move if that stops being true. Stands in here for the
+// in-memory bytes an OpenOCD TCL trace-buffer read would hand over
+// directly, with no file involved at all.
+std::expected<std::vector<uint8_t>, std::string> ReadFile(const std::filesystem::path &path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return std::unexpected(std::format("failed to open '{}'", path.string()));
+    }
+    const std::streamsize size = file.tellg();
+    if (size < 0) {
+        return std::unexpected(std::format("failed to determine size of '{}'", path.string()));
+    }
+    std::vector<uint8_t> out(static_cast<size_t>(size));
+    file.seekg(0);
+    if (size > 0 && !file.read(reinterpret_cast<char *>(out.data()), size)) {
+        return std::unexpected(std::format("failed to read '{}'", path.string()));
+    }
+    return out;
+}
+
+// ETMv4 registers + deformatter config captured from a real Cortex-M7
+// target alongside test_resources/etm_dump.bin. Stands in for what an
+// OpenOCD TCL client will read from the target's CoreSight components at
+// runtime.
+decode::InstructionTraceDecodeConfig::Builder SampleDecodeConfig() {
+    decode::Etmv4Registers regs;
+    regs.trcconfigr = 0x00000009;
+    regs.trctraceidr = 0x00000001;
+    regs.trcidr0 = 0x080006E1;
+    regs.trcidr1 = 0x4100F401;
+    regs.trcidr2 = 0x00000004;
+    regs.trcidr3 = 0x07090004;
+    regs.trcidr4 = 0x00114000;
+    regs.trcidr5 = 0x90C70002;
+    regs.trcidr8 = 0x00000000;
+    regs.trcidr9 = 0x00000000;
+    regs.trcidr10 = 0x00000000;
+    regs.trcidr11 = 0x00000000;
+    regs.trcidr12 = 0x00000001;
+    regs.trcidr13 = 0x00000000;
+    regs.trcauthstatus = 0x000000C0;
+
+    decode::DeformatterConfig deformatter;
+    deformatter.source_format = decode::TraceSourceFormat::kFrameFormatted;
+    deformatter.frame_sync = decode::FrameSyncMode::kMemAligned;
+    deformatter.reset_on_4x_fsync = true;
+
+    return decode::InstructionTraceDecodeConfig::Builder()
+        .SetCoreName("Cortex-M7")
+        .SetDeformatter(deformatter)
+        .SetRegisters(regs);
 }
 
 // Compact rendering of a full inline-frame chain, innermost first, e.g.
@@ -101,17 +169,20 @@ void PrintFunctionBlocks(const std::vector<model::FunctionBlock> &functions) {
 }  // namespace
 
 int main(int argc, char **argv) {
-    const std::string config_path = argc > 1 ? argv[1] : TRAILER_SAMPLE_CONFIG_PATH;
+    const std::filesystem::path elf_path = argc > 2 ? argv[1] : TRAILER_SAMPLE_ELF_PATH;
+    const std::filesystem::path trace_dump_path = argc > 2 ? argv[2] : TRAILER_SAMPLE_TRACE_DUMP_PATH;
 
-    config::ConfigParser parser;
-    const std::expected<config::PipelineConfig, std::string> parse_result = parser.ParseJson(config_path);
-    if (!parse_result) {
-        return Fail(parse_result.error());
+    const std::expected<std::vector<uint8_t>, std::string> trace_data = ReadFile(trace_dump_path);
+    if (!trace_data) {
+        return Fail(trace_data.error());
     }
-    const config::PipelineConfig &config = *parse_result;
+
+    decode::InstructionTraceDecodeConfig::Builder builder = SampleDecodeConfig();
+    builder.SetProgramPath(elf_path).SetTraceData(std::move(*trace_data));
+    const decode::InstructionTraceDecodeConfig config = std::move(builder).Build();
 
     std::expected<disasm::ProgramDisassembler, std::string> disasm_result =
-        disasm::ProgramDisassembler::Create(config.program_path);
+        disasm::ProgramDisassembler::Create(config.program_path());
     if (!disasm_result) {
         return Fail(disasm_result.error());
     }

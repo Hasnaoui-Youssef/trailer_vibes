@@ -261,7 +261,7 @@ Compiler:
 
 Build system:
 
-- CMake
+- CMake, always configured with the Ninja generator (`cmake -S . -B build -G Ninja`) and Clang (`CC=clang CMAKE_C_COMPILER=clang`, `CXX=clang++ CMAKE_CXX_COMPILER=clang++`). Never configure or build this project with another generator (e.g. Unix Makefiles) or another compiler (e.g. GCC).
 
 Dependencies should be added through FetchContent whenever practical.
 

@@ -50,6 +50,7 @@ cmake_install.cmake
 Makefile
 install_manifest.txt
 compile_commands.json
+CMakeUserPresets.json
 
 # Temporary files
 *.tmp
@@ -66,3 +67,9 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Staging copy of lldb-dap's upstream source, used as a porting reference
+# while forking Handler/*.cpp and the standalone breakpoint/variable/event
+# classes onto our own DapSession - not a build dependency, deleted once
+# the port is done.
+/lldb-dap-upstream/
