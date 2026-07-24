@@ -60,13 +60,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(opencsd)
 FetchContent_MakeAvailable(nlohmann_json)
 
-add_subdirectory(modules/snapshot_parser)
-add_subdirectory(modules/trace_sink)
-add_subdirectory(modules/trace_decoder)
-add_subdirectory(modules/trace_model)
-add_subdirectory(modules/disassembler)
-add_subdirectory(modules/trace_transform)
+add_subdirectory(modules/common)
+add_subdirectory(modules/providers)
 add_subdirectory(modules/dap)
+add_subdirectory(modules/core)
 
 add_executable(trailer
         src/main.cc
@@ -97,7 +94,9 @@ add_executable(trailer-dap
 
 target_link_libraries(trailer-dap
     PRIVATE
-    dap
+    dap_core
+    debug_service
+    dap_handlers
 )
 
 target_compile_features(trailer-dap PRIVATE cxx_std_23)

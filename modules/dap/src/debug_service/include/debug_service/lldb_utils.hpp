@@ -9,6 +9,7 @@
 #ifndef LLDB_TOOLS_LLDB_DAP_LLDBUTILS_H
 #define LLDB_TOOLS_LLDB_DAP_LLDBUTILS_H
 
+#include "core/lldb_utils.hpp"
 #include "debug_service/dap_forward.hpp"
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBEnvironment.h"
@@ -25,82 +26,18 @@
 #include <chrono>
 #include <string>
 
-namespace dap::debug_service {
+namespace dap {
 
-/// Run a list of LLDB commands in the LLDB command interpreter.
-///
-/// All output from every command, including the prompt + the command
-/// is placed into the "strm" argument.
-///
-/// Each individual command can be prefixed with \b ! and/or \b ? in no
-/// particular order. If \b ? is provided, then the output of that command is
-/// only emitted if it fails, and if \b ! is provided, then the output is
-/// emitted regardless, and \b false is returned without executing the
-/// remaining commands.
-///
-/// \param[in] debugger
-///     The debugger that will execute the lldb commands.
-///
-/// \param[in] prefix
-///     A string that will be printed into \a strm prior to emitting
-///     the prompt + command and command output. Can be NULL.
-///
-/// \param[in] commands
-///     An array of LLDB commands to execute.
-///
-/// \param[in] strm
-///     The stream that will receive the prefix, prompt + command and
-///     all command output.
-///
-/// \param[in] parse_command_directives
-///     If \b false, then command prefixes like \b ! or \b ? are not parsed and
-///     each command is executed verbatim.
-///
-/// \param[in] echo_commands
-///     If \b true, the command are echoed to the stream.
-///
-/// \return
-///     \b true, unless a command prefixed with \b ! fails and parsing of
-///     command directives is enabled.
-bool RunLLDBCommands(lldb::SBDebugger &debugger, llvm::StringRef prefix,
-                     const llvm::ArrayRef<std::string> &commands,
-                     llvm::raw_ostream &strm, bool parse_command_directives,
-                     bool echo_commands);
-
-/// Run a list of LLDB commands in the LLDB command interpreter.
-///
-/// All output from every command, including the prompt + the command
-/// is returned in the std::string return value.
-///
-/// \param[in] debugger
-///     The debugger that will execute the lldb commands.
-///
-/// \param[in] prefix
-///     A string that will be printed into \a strm prior to emitting
-///     the prompt + command and command output. Can be NULL.
-///
-/// \param[in] commands
-///     An array of LLDB commands to execute.
-///
-/// \param[out] required_command_failed
-///     If parsing of command directives is enabled, this variable is set to
-///     \b true if one of the commands prefixed with \b ! fails.
-///
-/// \param[in] parse_command_directives
-///     If \b false, then command prefixes like \b ! or \b ? are not parsed and
-///     each command is executed verbatim.
-///
-/// \param[in] echo_commands
-///     If \b true, the command are echoed to the stream.
-///
-/// \return
-///     A std::string that contains the prefix and all commands and
-///     command output.
-std::string RunLLDBCommands(lldb::SBDebugger &debugger, llvm::StringRef prefix,
-                            const llvm::ArrayRef<std::string> &commands,
-                            bool &required_command_failed,
-                            bool parse_command_directives = true,
-                            bool echo_commands = false);
+// GetSBFileSpecPath, GetLineEntryForAddress and GetStopDisassemblyDisplay
+// moved to core/lldb_utils.hpp (see PROJECT_STATUS.md's Module carve);
+// RunLLDBCommands and ScopeSyncMode moved there too with the Target carve -
+// re-exported here so existing callers keep working unqualified.
+using core::GetLineEntryForAddress;
+using core::GetSBFileSpecPath;
+using core::GetStopDisassemblyDisplay;
+using core::RunLLDBCommands;
+using core::ScopeSyncMode;
+using core::ToError;
 
 /// Check if a thread has a stop reason.
 ///
@@ -127,31 +64,12 @@ bool ThreadHasStopReason(lldb::SBThread &thread);
 ///     stack frame within a thread on subsequent VS code requests.
 uint64_t MakeDAPFrameID(lldb::SBFrame &frame);
 
-/// Given a DebugService frame ID, convert to a LLDB thread index id.
-///
-/// DebugService requires a Stackframe "id" to be unique, so we use the frame
-/// index in the lower THREAD_INDEX_SHIFT bits and the thread index ID in
-/// the upper 32 - THREAD_INDEX_SHIFT bits.
-///
-/// \param[in] dap_frame_id
-///     The DebugService frame ID to convert to a thread index ID.
-///
-/// \return
-///     The LLDB thread index ID.
-uint32_t GetLLDBThreadIndexID(uint64_t dap_frame_id);
-
-/// Given a DebugService frame ID, convert to a LLDB frame ID.
-///
-/// DebugService requires a Stackframe "id" to be unique, so we use the frame
-/// index in the lower THREAD_INDEX_SHIFT bits and the thread index ID in
-/// the upper 32 - THREAD_INDEX_SHIFT bits.
-///
-/// \param[in] dap_frame_id
-///     The DebugService frame ID to convert to a frame ID.
-///
-/// \return
-///     The LLDB frame index ID.
-uint32_t GetLLDBFrameID(uint64_t dap_frame_id);
+// GetLLDBThreadIndexID/GetLLDBFrameID (the decode side of the encoding
+// MakeDAPFrameID above implements) moved to core/lldb_utils.hpp with
+// DebugContext::GetLLDBFrame - see PROJECT_STATUS.md's Data carve. Not
+// re-exported here: this header's own remaining caller (MakeDAPFrameID,
+// used by the not-yet-carved stack-trace handler) never needed the decode
+// direction.
 
 /// Gets all the environment variables from the json object depending on if the
 /// kind is an object or an array.
@@ -163,27 +81,6 @@ uint32_t GetLLDBFrameID(uint64_t dap_frame_id);
 ///     The environment variables stored in the env key
 lldb::SBEnvironment
 GetEnvironmentFromArguments(const llvm::json::Object &arguments);
-
-/// Gets an SBFileSpec and returns its path as a string.
-///
-/// \param[in] file_spec
-///     The file spec.
-///
-/// \return
-///     The file path as a string.
-std::string GetSBFileSpecPath(const lldb::SBFileSpec &file_spec);
-
-/// Gets the line entry for a given address.
-/// \param[in] target
-///     The target that has the address.
-///
-/// \param[in] address
-///     The address for which to get the line entry.
-///
-/// \return
-///     The line entry for the given address.
-lldb::SBLineEntry GetLineEntryForAddress(lldb::SBTarget &target,
-                                         const lldb::SBAddress &address);
 
 /// Helper for sending telemetry to lldb server, if client-telemetry is enabled.
 class TelemetryDispatcher {
@@ -222,29 +119,6 @@ private:
   lldb::SBDebugger *debugger;
 };
 
-/// RAII utility to put the debugger temporarily  into synchronous mode.
-class ScopeSyncMode {
-public:
-  ScopeSyncMode(lldb::SBDebugger &debugger);
-  ~ScopeSyncMode();
-
-private:
-  lldb::SBDebugger &m_debugger;
-  bool m_async;
-};
-
-/// Get the stop-disassembly-display settings
-///
-/// \param[in] debugger
-///     The debugger that will execute the lldb commands.
-///
-/// \return
-///     The value of the stop-disassembly-display setting
-lldb::StopDisassemblyType GetStopDisassemblyDisplay(lldb::SBDebugger &debugger);
-
-/// Take ownership of the stored error.
-llvm::Error ToError(const lldb::SBError &error, bool show_user = true);
-
 /// Provides the string value if this data structure is a string type.
 std::string GetStringValue(const lldb::SBStructuredData &data);
 
@@ -266,6 +140,6 @@ std::string GetStringValue(const lldb::SBStructuredData &data);
 /// see https://utf8everywhere.org/#characters for more info.
 std::optional<size_t> UTF16CodeunitToBytes(llvm::StringRef line,
                                            uint32_t utf16_codeunits);
-} // namespace dap::debug_service
+} // namespace dap
 
 #endif

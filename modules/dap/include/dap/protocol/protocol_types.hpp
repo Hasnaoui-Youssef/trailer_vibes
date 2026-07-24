@@ -21,8 +21,7 @@
 #define TRAILER_DAP_PROTOCOL_PROTOCOL_TYPES_HPP_
 
 #include "dap/protocol/dap_types.hpp"
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
+#include "dap/protocol/dap_defines.hpp"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/JSON.h"
 #include <cstdint>
@@ -528,7 +527,7 @@ llvm::json::Value toJSON(const SteppingGranularity &);
 /// which single target the `stepIn` request should step.
 struct StepInTarget {
   /// Unique identifier for a step-in target.
-  lldb::addr_t id = LLDB_INVALID_ADDRESS;
+  addr_t id = LLDB_INVALID_ADDRESS;
 
   /// The name of the step-in target (shown in the UI).
   std::string label;
@@ -555,7 +554,7 @@ llvm::json::Value toJSON(const StepInTarget &);
 /// A Thread.
 struct Thread {
   /// Unique identifier for the thread.
-  lldb::tid_t id = LLDB_INVALID_THREAD_ID;
+  tid_t id = LLDB_INVALID_THREAD_ID;
   /// The name of the thread.
   std::string name;
 };
@@ -785,7 +784,7 @@ struct DisassembledInstruction {
 
   /// The address of the instruction. Treated as a hex value if prefixed with
   /// `0x`, or as a decimal value otherwise.
-  lldb::addr_t address = LLDB_INVALID_ADDRESS;
+  addr_t address = LLDB_INVALID_ADDRESS;
 
   /// Raw bytes representing the instruction and its operands, in an
   /// implementation-defined format.
@@ -987,7 +986,7 @@ struct Variable {
   ///
   /// This attribute may be returned by a debug adapter if corresponding
   /// capability `supportsMemoryReferences` is true.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// A reference that allows the client to request the location where the
   /// variable is declared. This should be present only if the adapter is likely
@@ -1084,7 +1083,7 @@ struct StackFrame {
   /// An identifier for the stack frame. It must be unique across all threads.
   /// This id can be used to retrieve the scopes of the frame with the `scopes`
   /// request or to restart the execution of a stack frame.
-  lldb::tid_t id = LLDB_DAP_INVALID_STACK_FRAME_ID;
+  tid_t id = LLDB_DAP_INVALID_STACK_FRAME_ID;
 
   /// The name of the stack frame, typically a method name.
   std::string name;
@@ -1118,7 +1117,7 @@ struct StackFrame {
   bool canRestart = false;
 
   /// A memory reference for the current instruction pointer in this frame.
-  lldb::addr_t instructionPointerReference = LLDB_INVALID_ADDRESS;
+  addr_t instructionPointerReference = LLDB_INVALID_ADDRESS;
 
   /// The module associated with this frame, if any.
   std::optional<std::string> moduleId;

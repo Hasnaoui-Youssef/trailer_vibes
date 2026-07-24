@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "dap/protocol/protocol_base.hpp"
+#include "dap/request_handler.hpp"
 #include "dap/service.hpp"
 #include "dap/transport.hpp"
 #include "llvm/ADT/StringRef.h"
@@ -28,10 +29,23 @@ public:
     // collide with an already-registered service.
     void RegisterService(Service &service);
 
+    // Registers `handler` as the owner of `command`. `handler` must outlive
+    // the Orchestrator. This is the routing seam for handlers that don't
+    // belong to a coarse-grained Service - the Orchestrator dispatches to
+    // handlers directly, without knowing (or needing to know) which service,
+    // if any, backs them. Checked before the Service table, so a handler and
+    // a Service must not claim the same command.
+    void RegisterHandler(std::string command, IRequestHandler &handler);
+
+    // Aggregates GetSupportedFeatures() across every handler registered via
+    // RegisterHandler - used by services to assemble their `initialize`
+    // response Capabilities without owning a handler registry themselves.
+    IRequestHandler::FeatureSet AggregatedHandlerFeatures() const;
+
     // Runs the read-dispatch loop until the transport reports EOF or a
     // service calls RequestStop(). Every request whose command isn't owned
-    // by any registered service gets a `success = false` error response
-    // rather than being silently dropped, per the DAP spec.
+    // by any registered service or handler gets a `success = false` error
+    // response rather than being silently dropped, per the DAP spec.
     void Run();
 
     // The single source of sequence numbers for this session - shared
@@ -59,6 +73,7 @@ private:
 
     Transport transport_;
     std::unordered_map<std::string, Service *> command_owners_;
+    std::unordered_map<std::string, IRequestHandler *> command_handlers_;
     protocol::Id next_seq_ = 1;
     bool done_ = false;
 };

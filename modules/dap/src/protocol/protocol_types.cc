@@ -8,8 +8,6 @@
 
 #include "dap/protocol/protocol_types.hpp"
 #include "dap/protocol_support.hpp"
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"

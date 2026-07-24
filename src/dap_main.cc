@@ -16,7 +16,6 @@
 
 #include "dap/debug_service_factory.hpp"
 #include "dap/orchestrator.hpp"
-#include "dap/service.hpp"
 #include "dap/transport.hpp"
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBError.h"
@@ -35,11 +34,14 @@ int main() {
         dap::Transport transport(/*in_fd=*/STDIN_FILENO, /*out_fd=*/STDOUT_FILENO);
         dap::Orchestrator orchestrator(std::move(transport));
 
-        // DebugService (the forked lldb-dap surface) is the only service
-        // registered so far. Future services (instruction trace,
-        // peripherals) register here too, alongside it.
-        std::unique_ptr<dap::Service> debug_service = dap::debug_service::CreateDebugService(orchestrator);
-        orchestrator.RegisterService(*debug_service);
+        // The debug service session owns the DebugService instance and
+        // every one of its request handlers, registering each directly
+        // with the Orchestrator (see dap/debug_service_factory.hpp) -
+        // dispatch no longer goes through a dap::Service at all. Future
+        // services (instruction trace, peripherals) get their own session
+        // object alongside this one.
+        std::unique_ptr<dap::DebugServiceSession> debug_service_session =
+            dap::CreateDebugServiceSession(orchestrator);
 
         orchestrator.Run();
     }

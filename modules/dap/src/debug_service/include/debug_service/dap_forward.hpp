@@ -13,20 +13,19 @@
 
 namespace dap {
 class Orchestrator;
-} // namespace dap
-
-namespace dap::debug_service {
-class BaseRequestHandler;
-class BreakpointBase;
-class ExceptionBreakpoint;
-class FunctionBreakpoint;
-class InstructionBreakpoint;
 class Log;
 class ResponseHandler;
-class SourceBreakpoint;
-class Watchpoint;
+class BaseRequestHandler;
 class DebugService;
-} // namespace dap::debug_service
+} // namespace dap
+
+// Breakpoint node types (BreakpointBase/ExceptionBreakpoint/
+// FunctionBreakpoint/InstructionBreakpoint/SourceBreakpoint/Watchpoint) and
+// BreakpointManager moved to core/components - see PROJECT_STATUS.md.
+namespace core {
+class BreakpointManager;
+class DebugContext;
+} // namespace core
 
 namespace lldb {
 class SBAttachInfo;

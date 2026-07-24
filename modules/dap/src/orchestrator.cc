@@ -16,6 +16,22 @@ void Orchestrator::RegisterService(Service &service) {
     }
 }
 
+void Orchestrator::RegisterHandler(std::string command, IRequestHandler &handler) {
+    const auto [it, inserted] = command_handlers_.emplace(std::move(command), &handler);
+    if (!inserted) {
+        std::cerr << "dap: command '" << it->first << "' registered by more than one handler\n";
+    }
+}
+
+IRequestHandler::FeatureSet Orchestrator::AggregatedHandlerFeatures() const {
+    IRequestHandler::FeatureSet features;
+    for (const auto &kv : command_handlers_) {
+        IRequestHandler::FeatureSet handler_features = kv.second->GetSupportedFeatures();
+        features.insert(handler_features.begin(), handler_features.end());
+    }
+    return features;
+}
+
 void Orchestrator::Run() {
     while (!done_) {
         std::optional<llvm::json::Value> message = transport_.ReadMessage();
@@ -36,6 +52,15 @@ void Orchestrator::Run() {
 }
 
 void Orchestrator::HandleRequest(const protocol::Request &request) {
+    // Handlers are checked first: a handler owns exactly one command and is
+    // the preferred routing seam (see dap::IRequestHandler); Service is the
+    // coarser-grained fallback for any future service that dispatches its
+    // own commands internally instead of registering per-command handlers.
+    if (const auto handler_it = command_handlers_.find(request.command); handler_it != command_handlers_.end()) {
+        handler_it->second->Run(request);
+        return;
+    }
+
     const auto it = command_owners_.find(request.command);
     if (it == command_owners_.end()) {
         SendErrorResponse(request, "unrecognized request: '" + request.command + "'");

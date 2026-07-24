@@ -9,7 +9,6 @@
 #include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol_support.hpp"
 #include "dap/protocol/protocol_types.hpp"
-#include "lldb/lldb-defines.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"

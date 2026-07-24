@@ -16,13 +16,56 @@
 #ifndef TRAILER_DAP_PROTOCOL_DAP_TYPES_HPP_
 #define TRAILER_DAP_PROTOCOL_DAP_TYPES_HPP_
 
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
+#include "dap/protocol/dap_defines.hpp"
 #include "llvm/Support/JSON.h"
 #include <optional>
 #include <string>
 
 namespace dap::protocol {
+
+/// Mirrors lldb::SymbolType (lldb/lldb-enumerations.h) value-for-value, so
+/// providers/lldb's conversion at the LLDB boundary is a plain static_cast.
+/// dap_protocol never includes LLDB - see dap_defines.hpp.
+enum class SymbolType {
+  eSymbolTypeInvalid = 0,
+  eSymbolTypeAbsolute,
+  eSymbolTypeCode,
+  eSymbolTypeResolver,
+  eSymbolTypeData,
+  eSymbolTypeTrampoline,
+  eSymbolTypeRuntime,
+  eSymbolTypeException,
+  eSymbolTypeSourceFile,
+  eSymbolTypeHeaderFile,
+  eSymbolTypeObjectFile,
+  eSymbolTypeCommonBlock,
+  eSymbolTypeBlock,
+  eSymbolTypeLocal,
+  eSymbolTypeParam,
+  eSymbolTypeVariable,
+  eSymbolTypeVariableType,
+  eSymbolTypeLineEntry,
+  eSymbolTypeLineHeader,
+  eSymbolTypeScopeBegin,
+  eSymbolTypeScopeEnd,
+  eSymbolTypeAdditional,
+  eSymbolTypeCompiler,
+  eSymbolTypeInstrumentation,
+  eSymbolTypeUndefined,
+  eSymbolTypeObjCClass,
+  eSymbolTypeObjCMetaClass,
+  eSymbolTypeObjCIVar,
+  eSymbolTypeReExported,
+};
+
+/// Wire-format name for `type` (e.g. "Code", "Data") - matches what
+/// lldb::SBSymbol::GetTypeAsString produced, verified against a live
+/// liblldb before porting.
+llvm::StringRef SymbolTypeToString(SymbolType type);
+
+/// Reverse of SymbolTypeToString; returns eSymbolTypeInvalid for an
+/// unrecognized string.
+SymbolType SymbolTypeFromString(llvm::StringRef str);
 
 /// Data used to help lldb-dap resolve breakpoints persistently across different
 /// sessions. This information is especially useful for assembly breakpoints,
@@ -64,16 +107,16 @@ struct Symbol {
   bool isExternal = false;
 
   /// The symbol type.
-  lldb::SymbolType type = lldb::eSymbolTypeInvalid;
+  SymbolType type = SymbolType::eSymbolTypeInvalid;
 
   /// The symbol file address.
-  lldb::addr_t fileAddress = LLDB_INVALID_ADDRESS;
+  addr_t fileAddress = LLDB_INVALID_ADDRESS;
 
   /// The symbol load address.
-  std::optional<lldb::addr_t> loadAddress;
+  std::optional<addr_t> loadAddress;
 
   /// The symbol size.
-  lldb::addr_t size = 0;
+  addr_t size = 0;
 
   /// The symbol name.
   std::string name;

@@ -3,7 +3,6 @@
 #include <iomanip>
 #include <sstream>
 
-#include "lldb/lldb-defines.h"
 #include "llvm/ADT/StringExtras.h"
 
 // Vendored from LLVM's lldb-dap (JSONUtils.cpp::EncodeMemoryReference/
@@ -13,14 +12,14 @@
 
 namespace dap {
 
-std::string EncodeMemoryReference(lldb::addr_t addr) { return "0x" + llvm::utohexstr(addr); }
+std::string EncodeMemoryReference(protocol::addr_t addr) { return "0x" + llvm::utohexstr(addr); }
 
-std::optional<lldb::addr_t> DecodeMemoryReference(llvm::StringRef memoryReference) {
+std::optional<protocol::addr_t> DecodeMemoryReference(llvm::StringRef memoryReference) {
     if (!memoryReference.starts_with("0x")) {
         return std::nullopt;
     }
 
-    lldb::addr_t addr;
+    protocol::addr_t addr;
     if (memoryReference.consumeInteger(0, addr)) {
         return std::nullopt;
     }
@@ -28,7 +27,7 @@ std::optional<lldb::addr_t> DecodeMemoryReference(llvm::StringRef memoryReferenc
     return addr;
 }
 
-bool DecodeMemoryReference(const llvm::json::Value &v, llvm::StringLiteral key, lldb::addr_t &out,
+bool DecodeMemoryReference(const llvm::json::Value &v, llvm::StringLiteral key, protocol::addr_t &out,
                             llvm::json::Path path, bool required, bool allow_empty) {
     const llvm::json::Object *v_obj = v.getAsObject();
     if (!v_obj) {
@@ -56,7 +55,7 @@ bool DecodeMemoryReference(const llvm::json::Value &v, llvm::StringLiteral key, 
         return true;
     }
 
-    const std::optional<lldb::addr_t> addr_opt = DecodeMemoryReference(*mem_ref_str);
+    const std::optional<protocol::addr_t> addr_opt = DecodeMemoryReference(*mem_ref_str);
     if (!addr_opt) {
         path.field(key).report("malformed memory reference");
         return false;

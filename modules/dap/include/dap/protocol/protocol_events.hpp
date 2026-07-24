@@ -21,8 +21,7 @@
 #define TRAILER_DAP_PROTOCOL_PROTOCOL_EVENTS_HPP_
 
 #include "dap/protocol/protocol_types.hpp"
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
+#include "dap/protocol/dap_defines.hpp"
 #include "llvm/Support/JSON.h"
 #include <cstdint>
 #include <optional>
@@ -80,7 +79,7 @@ struct InvalidatedEventBody {
 
   /// If specified, the client only needs to refetch data related to this
   /// thread.
-  std::optional<lldb::tid_t> threadId;
+  std::optional<tid_t> threadId;
 
   /// If specified, the client only needs to refetch data related to this stack
   /// frame (and the `threadId` is ignored).
@@ -107,7 +106,7 @@ llvm::json::Value toJSON(const InvalidatedEventBody &);
 /// many events.
 struct MemoryEventBody {
   /// Memory reference of a memory range that has been updated.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// Starting offset in bytes where memory has been updated. Can be negative.
   int64_t offset = 0;

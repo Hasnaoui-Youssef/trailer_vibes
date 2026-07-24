@@ -22,8 +22,7 @@
 
 #include "dap/protocol/protocol_base.hpp"
 #include "dap/protocol/protocol_types.hpp"
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
+#include "dap/protocol/dap_defines.hpp"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/JSON.h"
@@ -319,10 +318,10 @@ using LaunchResponse = VoidResponse;
 
 struct DAPSession {
   /// Unique ID of an existing target to attach to.
-  lldb::user_id_t targetId;
+  user_id_t targetId;
 
   /// ID of an existing debugger instance to use.
-  lldb::user_id_t debuggerId;
+  user_id_t debuggerId;
 };
 bool fromJSON(const llvm::json::Value &, DAPSession &, llvm::json::Path);
 
@@ -344,7 +343,7 @@ struct AttachRequestArguments {
   std::vector<std::string> attachCommands;
 
   /// System process ID to attach to.
-  lldb::pid_t pid = LLDB_INVALID_PROCESS_ID;
+  pid_t pid = LLDB_INVALID_PROCESS_ID;
 
   /// Wait for the process to launch.
   bool waitFor = false;
@@ -377,7 +376,7 @@ struct ContinueArguments {
   /// Specifies the active thread. If the debug adapter supports single thread
   /// execution (see `supportsSingleThreadExecutionRequests`) and the argument
   /// `singleThread` is true, only the thread with this ID is resumed.
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 
   /// If this flag is true, execution is resumed only for the thread with given
   /// `threadId`.
@@ -485,7 +484,7 @@ struct SetVariableResponseBody {
   /// memory address contained in the pointer.
   /// This attribute may be returned by a debug adapter if corresponding
   /// capability `supportsMemoryReferences` is true.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// A reference that allows the client to request the location where the new
   /// value is declared. For example, if the new value is function pointer, the
@@ -548,7 +547,7 @@ llvm::json::Value toJSON(const ThreadsResponseBody &);
 struct NextArguments {
   /// Specifies the thread for which to resume execution for one step (of the
   /// given granularity).
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 
   /// If this flag is true, all other suspended threads are not resumed.
   bool singleThread = false;
@@ -567,7 +566,7 @@ using NextResponse = VoidResponse;
 struct StepInArguments {
   /// Specifies the thread for which to resume execution for one step-into (of
   /// the given granularity).
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 
   /// If this flag is true, all other suspended threads are not resumed.
   bool singleThread = false;
@@ -604,7 +603,7 @@ llvm::json::Value toJSON(const StepInTargetsResponseBody &);
 struct StepOutArguments {
   /// Specifies the thread for which to resume execution for one step-out (of
   /// the given granularity).
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 
   /// If this flag is true, all other suspended threads are not resumed.
   std::optional<bool> singleThread;
@@ -857,7 +856,7 @@ llvm::json::Value toJSON(const SetExceptionBreakpointsResponseBody &);
 struct DisassembleArguments {
   /// Memory reference to the base location containing the instructions to
   /// disassemble.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// Offset (in bytes) to be applied to the reference location before
   /// disassembling. Can be negative.
@@ -894,7 +893,7 @@ llvm::json::Value toJSON(const DisassembleResponseBody &);
 /// Arguments for `readMemory` request.
 struct ReadMemoryArguments {
   /// Memory reference to the base location from which data should be read.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// Offset (in bytes) to be applied to the reference location before reading
   /// data. Can be negative.
@@ -911,7 +910,7 @@ struct ReadMemoryResponseBody {
   /// The address of the first byte of data returned.
   /// Treated as a hex value if prefixed with `0x`, or as a decimal value
   /// otherwise.
-  lldb::addr_t address = LLDB_INVALID_ADDRESS;
+  addr_t address = LLDB_INVALID_ADDRESS;
 
   /// The number of unreadable bytes encountered after the last successfully
   /// read byte.
@@ -999,7 +998,7 @@ llvm::json::Value toJSON(const VariablesResponseBody &);
 /// Arguments for `writeMemory` request.
 struct WriteMemoryArguments {
   /// Memory reference to the base location to which data should be written.
-  lldb::addr_t memoryReference = LLDB_INVALID_ADDRESS;
+  addr_t memoryReference = LLDB_INVALID_ADDRESS;
 
   /// Offset (in bytes) to be applied to the reference location before writing
   /// data. Can be negative.
@@ -1054,7 +1053,7 @@ llvm::json::Value toJSON(const ModuleSymbolsResponseBody &);
 
 struct ExceptionInfoArguments {
   /// Thread for which exception information should be retrieved.
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 };
 bool fromJSON(const llvm::json::Value &, ExceptionInfoArguments &,
               llvm::json::Path);
@@ -1194,7 +1193,7 @@ llvm::json::Value toJSON(const EvaluateResponseBody &);
 /// Arguments for `pause` request.
 struct PauseArguments {
   /// Pause execution for this thread.
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 };
 bool fromJSON(const llvm::json::Value &, PauseArguments &, llvm::json::Path);
 
@@ -1277,7 +1276,7 @@ using RestartResponse = VoidResponse;
 /// Arguments for `stackTrace` request.
 struct StackTraceArguments {
   /// Retrieve the stacktrace for this thread.
-  lldb::tid_t threadId = LLDB_INVALID_THREAD_ID;
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
 
   /// The index of the first frame to return; if omitted frames start at 0.
   uint32_t startFrame = 0;

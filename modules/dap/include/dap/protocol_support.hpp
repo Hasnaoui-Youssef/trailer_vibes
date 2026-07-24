@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 
-#include "lldb/lldb-types.h"
+#include "dap/protocol/dap_defines.hpp"
 #include "llvm/Support/JSON.h"
 
 // Vendored from LLVM's lldb-dap (JSONUtils.h/.cpp, ProtocolUtils.h/.cpp;
@@ -18,16 +18,16 @@
 namespace dap {
 
 // Encodes a memory reference (e.g. "0x1000").
-std::string EncodeMemoryReference(lldb::addr_t addr);
+std::string EncodeMemoryReference(protocol::addr_t addr);
 
 // Decodes a memory reference from a "0x..."-prefixed string.
-std::optional<lldb::addr_t> DecodeMemoryReference(llvm::StringRef memoryReference);
+std::optional<protocol::addr_t> DecodeMemoryReference(llvm::StringRef memoryReference);
 
 // Decodes a memory reference from `key` in the JSON object `v`. See
 // DecodeMemoryReference(llvm::StringRef) for the string format; `required`
 // controls whether a missing key is an error, `allow_empty` whether an
 // empty string decodes to LLDB_INVALID_ADDRESS rather than being rejected.
-bool DecodeMemoryReference(const llvm::json::Value &v, llvm::StringLiteral key, lldb::addr_t &out,
+bool DecodeMemoryReference(const llvm::json::Value &v, llvm::StringLiteral key, protocol::addr_t &out,
                             llvm::json::Path path, bool required, bool allow_empty = false);
 
 // Formats a byte count as a human-readable size (e.g. "1.0KB", "2.3MB").
