@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "debug_service/debug_service.hpp"
+#include "core/components/breakpoint_manager.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
 #include <set>
@@ -16,19 +16,10 @@ using namespace dap::protocol;
 
 namespace dap {
 
-/// The request configures the debugger’s response to thrown exceptions. Each of
-/// the `filters`, `filterOptions`, and `exceptionOptions` in the request are
-/// independent configurations to a debug adapter indicating a kind of exception
-/// to catch. An exception thrown in a program should result in a `stopped`
-/// event from the debug adapter (with reason `exception`) if any of the
-/// configured filters match.
-///
-/// Clients should only call this request if the corresponding capability
-/// `exceptionBreakpointFilters` returns one or more filters.
 Expected<SetExceptionBreakpointsResponseBody>
 SetExceptionBreakpointsRequestHandler::Run(
     const SetExceptionBreakpointsArguments &arguments) const {
-  core::BreakpointManager &breakpoints = dap.Context().Breakpoints();
+  core::BreakpointManager &breakpoints = context_.Breakpoints();
 
   // Keep a list of any exception breakpoint filter names that weren't set
   // so we can clear any exception breakpoints if needed.

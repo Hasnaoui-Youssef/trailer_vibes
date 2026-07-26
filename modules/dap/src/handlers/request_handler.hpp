@@ -9,8 +9,9 @@
 #ifndef LLDB_TOOLS_LLDB_DAP_HANDLER_HANDLER_H
 #define LLDB_TOOLS_LLDB_DAP_HANDLER_HANDLER_H
 
-#include "debug_service/debug_service.hpp"
+#include "core/debug_context.hpp"
 #include "dap/dap_error.hpp"
+#include "dap/orchestrator.hpp"
 #include "dap/protocol/protocol_base.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
@@ -26,22 +27,22 @@
 #include <vector>
 
 namespace dap {
-struct DebugService;
 
-/// Base class for request handlers that belong to the debug service. Do not
-/// extend this directly: extend the RequestHandler template subclass
-/// instead.
+/// Base class for every concrete DAP request handler. Do not extend this
+/// directly: extend the RequestHandler template subclass instead.
 ///
-/// This is the debug-service-specific half of the handler framework - it
-/// implements dap::IRequestHandler (the seam the Orchestrator dispatches
-/// through) but still holds a DebugService& and does DebugService-specific
-/// work (API mutex locking, interrupt-based cancellation) that a truly
-/// generic handler base can't do without a debug-session abstraction; see
-/// dap/request_handler.hpp for the LLDB-agnostic pieces (IRequestHandler,
-/// parseArgs) this builds on.
+/// Implements dap::IRequestHandler (the seam the Orchestrator dispatches
+/// through). Holds an Orchestrator& (communication: sending
+/// responses/events, cancellation, client feature negotiation) and a
+/// core::DebugContext& (domain: the debug session and its components) -
+/// see CLAUDE.md's layering rule that no layer above core/providers may
+/// know about the LLDB SB API. No lock of any kind is held here: every
+/// core method a handler calls locks internally, for its own duration
+/// (see core/debug_context.hpp).
 class BaseRequestHandler : public dap::IRequestHandler {
 public:
-  BaseRequestHandler(DebugService &dap) : dap(dap) {}
+  BaseRequestHandler(Orchestrator &orchestrator, core::DebugContext &context)
+      : orchestrator_(orchestrator), context_(context) {}
 
   /// BaseRequestHandler are not copyable.
   /// @{
@@ -57,7 +58,6 @@ public:
 
 protected:
   /// Helpers used by multiple request handlers.
-  /// FIXME: Move these into the DebugService class?
   /// @{
 
   /// Prints a welcome message on the editor if the preprocessor variable
@@ -94,7 +94,8 @@ protected:
   /// Send a response to the client.
   void Send(protocol::Response &response) const;
 
-  DebugService &dap;
+  Orchestrator &orchestrator_;
+  core::DebugContext &context_;
 };
 
 /// Base class for handling DebugService requests. Handlers should declare their
@@ -164,13 +165,13 @@ class DelayedResponseRequestHandler : public BaseRequestHandler {
 
     BuildErrorResponse(Run(*arguments), response);
 
-    dap.on_configuration_done = [this, response]() mutable { Send(response); };
+    orchestrator_.SetDeferredConfigurationResponse([this, response]() mutable { Send(response); });
 
     // The 'configurationDone' request is not sent until after 'initialized'
     // triggers the breakpoints being sent and 'configurationDone' is the last
     // message in the chain.
     protocol::Event initialized{"initialized"};
-    dap.Send(initialized);
+    orchestrator_.Send(initialized);
   };
 
 protected:
@@ -200,14 +201,6 @@ public:
   }
   llvm::Expected<protocol::BreakpointLocationsResponseBody>
   Run(const protocol::BreakpointLocationsArguments &args) const override;
-
-  std::vector<std::pair<uint32_t, uint32_t>>
-  GetSourceBreakpointLocations(std::string path, uint32_t start_line,
-                               uint32_t start_column, uint32_t end_line,
-                               uint32_t end_column) const;
-  std::vector<std::pair<uint32_t, uint32_t>>
-  GetAssemblyBreakpointLocations(int64_t source_reference, uint32_t start_line,
-                                 uint32_t end_line) const;
 };
 
 class CompletionsRequestHandler

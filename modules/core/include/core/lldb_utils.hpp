@@ -18,6 +18,7 @@
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBFileSpec.h"
+#include "lldb/API/SBFrame.h"
 #include "lldb/API/SBLineEntry.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/lldb-types.h"
@@ -56,9 +57,8 @@ std::optional<dap::protocol::Source> CreateSource(const lldb::SBFileSpec &file);
 bool IsAssemblySource(const dap::protocol::Source &source);
 
 /// A DAP frame id encodes both a thread index ID and a frame index, packed
-/// into a single integer (see MakeDAPFrameID in debug_service/lldb_utils.hpp
-/// for the encoding side, which stays there since its only caller,
-/// stack_trace_request_handler, isn't carved yet).
+/// into a single integer.
+uint64_t MakeDAPFrameID(lldb::SBFrame &frame);
 uint32_t GetLLDBThreadIndexID(uint64_t dap_frame_id);
 uint32_t GetLLDBFrameID(uint64_t dap_frame_id);
 
@@ -93,9 +93,14 @@ private:
 /// Take ownership of the stored error.
 llvm::Error ToError(const lldb::SBError &error, bool show_user = true);
 
-/// Builds the "terminated" event body, including the target's `$__lldb_
-/// statistics` dump (used by DebugService::SendTerminatedEvent).
-llvm::json::Object CreateTerminatedEventObject(lldb::SBTarget &target);
+/// Serializes the target's `$__lldb_statistics` dump to a JSON string, or an
+/// empty string if the target has no statistics available. Returned as a
+/// string (not a llvm::json::Value) so it can cross into
+/// core::TerminatedEvent (core/event_bus.hpp) without core::EventBus itself
+/// needing to know about llvm::json - see TargetManager::SendTerminatedEvent
+/// and the event_translator's TerminatedEvent arm, which re-parses it once
+/// when building the wire event.
+std::string BuildTerminatedStatisticsJSON(lldb::SBTarget &target);
 
 }  // namespace core
 

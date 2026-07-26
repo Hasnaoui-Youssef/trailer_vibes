@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
 #include "lldb/lldb-types.h"
 #include "llvm/Support/Error.h"
@@ -39,6 +40,12 @@ public:
   llvm::Expected<std::vector<dap::protocol::DisassembledInstruction>>
   Disassemble(lldb::addr_t memory_reference, int64_t byte_offset, int64_t instruction_offset,
               uint64_t instruction_count, bool resolve_symbols);
+
+  // Serves `source` for a source reference that resolves to an address
+  // rather than a file - falls back to k_number_of_assembly_lines_for_nodebug
+  // instructions when there's no symbol to bound the disassembly.
+  llvm::Expected<dap::protocol::SourceResponseBody> GetSourceRequest(
+      const dap::protocol::SourceArguments &args);
 
 private:
   DebugContext &m_context;

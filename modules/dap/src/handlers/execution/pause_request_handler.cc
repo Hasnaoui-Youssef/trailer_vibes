@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "debug_service/debug_service.hpp"
-#include "debug_service/lldb_utils.hpp"
+#include "core/components/execution_controller.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
 
@@ -17,10 +16,8 @@ namespace dap {
 /// PauseResponse and then a StoppedEvent (event type 'pause') after the thread
 /// has been paused successfully.
 llvm::Error
-PauseRequestHandler::Run(const protocol::PauseArguments &args) const {
-  lldb::SBProcess process = dap.target.GetProcess();
-  lldb::SBError error = process.Stop();
-  return ToError(error);
+PauseRequestHandler::Run(const protocol::PauseArguments &) const {
+  return context_.Execution().Pause();
 }
 
 } // namespace dap

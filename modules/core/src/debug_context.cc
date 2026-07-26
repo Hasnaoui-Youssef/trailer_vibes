@@ -4,14 +4,18 @@
 #include "core/components/data_manager.hpp"
 #include "core/components/disassembly_manager.hpp"
 #include "core/components/execution_controller.hpp"
+#include "core/components/exception_breakpoint.hpp"
 #include "core/components/memory_manager.hpp"
 #include "core/components/module_manager.hpp"
 #include "core/components/target_manager.hpp"
 #include "core/lldb_utils.hpp"
+#include "dap/dap_error.hpp"
+#include "dap/protocol/protocol_events.hpp"
 #include "dap/protocol/protocol_requests.hpp"
+#include "lldb/API/SBDebugger.h"
+#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBProcess.h"
-#include "lldb/lldb-defines.h"
-#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/Base64.h"
 
 namespace core {
 
@@ -39,26 +43,9 @@ void DebugContext::RunExitCommands() { target_manager_->RunExitCommands(); }
 
 bool DebugContext::HasLastLaunchRequest() const { return target_manager_->last_launch_request.has_value(); }
 
-void DebugContext::Send(const dap::protocol::Message &message) {
-  event_bus_.Publish(WireMessageEvent{message});
-}
-
-void DebugContext::SendJSON(const llvm::json::Value &json) {
-  dap::protocol::Message message;
-  llvm::json::Path::Root root;
-  if (!fromJSON(json, message, root)) {
-    LogDiagnostic(llvm::formatv("core: encoding failed: {0}", llvm::toString(root.getError())).str());
-    return;
-  }
-  Send(message);
-}
+void DebugContext::Emit(DomainEvent event) { event_bus_.Publish(event); }
 
 lldb::SBThread DebugContext::GetLLDBThread(lldb::tid_t tid) {
-  return lldb_provider_.target.GetProcess().GetThreadByID(tid);
-}
-
-lldb::SBThread DebugContext::GetLLDBThread(const llvm::json::Object &arguments) {
-  const lldb::tid_t tid = arguments.getInteger("threadId").value_or(LLDB_INVALID_THREAD_ID);
   return lldb_provider_.target.GetProcess().GetThreadByID(tid);
 }
 
@@ -68,11 +55,6 @@ lldb::SBFrame DebugContext::GetLLDBFrame(uint64_t dap_frame_id) {
   lldb::SBProcess process = lldb_provider_.target.GetProcess();
   lldb::SBThread thread = process.GetThreadByIndexID(GetLLDBThreadIndexID(dap_frame_id));
   return thread.GetFrameAtIndex(GetLLDBFrameID(dap_frame_id));
-}
-
-lldb::SBFrame DebugContext::GetLLDBFrame(const llvm::json::Object &arguments) {
-  const uint64_t dap_frame_id = arguments.getInteger("frameId").value_or(LLDB_DAP_INVALID_FRAME_ID);
-  return GetLLDBFrame(dap_frame_id);
 }
 
 void DebugContext::SendOutput(OutputCategory category, llvm::StringRef text) {
@@ -92,5 +74,48 @@ std::optional<dap::protocol::Source> DebugContext::ResolveSource(lldb::SBAddress
 std::optional<lldb::addr_t> DebugContext::GetSourceReferenceAddress(int32_t reference) {
   return module_manager_->GetSourceReferenceAddress(reference);
 }
+
+void DebugContext::SendTerminatedEvent() { target_manager_->SendTerminatedEvent(); }
+
+void DebugContext::SetFrameFormat(llvm::StringRef format) { data_manager_->SetFrameFormat(format); }
+void DebugContext::SetThreadFormat(llvm::StringRef format) { data_manager_->SetThreadFormat(format); }
+
+bool DebugContext::IsInterruptRequested() { return lldb_provider_.debugger.InterruptRequested(); }
+void DebugContext::CancelInterruptRequest() { lldb_provider_.debugger.CancelInterruptRequest(); }
+
+std::string DebugContext::ExecutablePath() {
+  lldb::SBMutex lock = GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+  return GetSBFileSpecPath(lldb_provider_.target.GetExecutable());
+}
+
+std::string DebugContext::TargetTriple() {
+  lldb::SBMutex lock = GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+  const char *triple = lldb_provider_.target.GetTriple();
+  return triple ? triple : "";
+}
+
+std::optional<uint64_t> DebugContext::ProcessId() {
+  lldb::SBMutex lock = GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+  lldb::SBProcess process = lldb_provider_.target.GetProcess();
+  if (!process.IsValid())
+    return std::nullopt;
+  return process.GetProcessID();
+}
+
+std::vector<dap::protocol::ExceptionBreakpointsFilter> DebugContext::ExceptionBreakpointFilters() {
+  lldb::SBMutex lock = GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  breakpoint_manager_->PopulateExceptionBreakpoints();
+  std::vector<dap::protocol::ExceptionBreakpointsFilter> filters;
+  for (const auto &exc_bp : breakpoint_manager_->exception_breakpoints)
+    filters.emplace_back(CreateExceptionBreakpointFilter(exc_bp));
+  return filters;
+}
+
+std::string DebugContext::LldbVersionString() { return lldb_provider_.debugger.GetVersionString(); }
 
 }  // namespace core

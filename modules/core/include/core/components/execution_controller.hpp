@@ -1,19 +1,8 @@
 //===-- execution_controller.hpp ------------------------------------------===//
 //
-// The execution component (see CLAUDE.md's DebugContext architecture):
-// state machine over thread/process execution state, plus the live SB
-// event-pump thread that drives it (`StartEventThread`/`EventThread` in the
-// original fork). Carved out of DebugService - see PROJECT_STATUS.md.
-//
-// Everything here that used to call DebugService::Send/SendJSON now calls
-// DebugContext::Send/SendJSON, which publish a WireMessageEvent instead of
-// touching the Orchestrator directly (core never depends on dap_core) -
-// see event_bus.hpp. dap_handlers' event_translator is the real subscriber
-// that performs the equivalent of DebugService::Send's seq-assignment and
-// wire write; the JSON each event carries is byte-identical to before
-// (built here with the same dap::CreateEventObject/EmplaceSafeString
-// helpers, now reachable from core because they moved to the LLDB-free,
-// Transport-free dap_protocol target alongside the protocol value types).
+// State machine over thread/process execution, plus the live SB event-pump
+// thread that drives it. Events go out via DebugContext::Emit (EventBus),
+// never straight to the Orchestrator.
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +14,7 @@
 #include <thread>
 
 #include "dap/protocol/protocol_events.hpp"
+#include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
 #include "lldb/API/SBBroadcaster.h"
 #include "lldb/API/SBError.h"
@@ -86,6 +76,11 @@ public:
   bool configuration_done = false;
   bool waiting_for_run_in_terminal = false;
 
+  /// The initial thread list upon attaching, cached by
+  /// ConfigurationDoneRequestHandler and consumed (once) by the first
+  /// `threads` request - see ThreadsRequestHandler::Run.
+  std::vector<dap::protocol::Thread> initial_thread_list;
+
   /// Starts (or re-starts) the SB event-pump thread listening on the
   /// debugger/target/broadcaster for process/target/breakpoint/thread
   /// events, translating them into DAP events.
@@ -99,6 +94,32 @@ public:
   void WillContinue();
 
   lldb::SBError WaitForProcessToStop(std::chrono::seconds seconds);
+
+  // Validates the process is stopped as expected, sends target-based/extra
+  // capabilities, caches the initial thread list, sends the "process"
+  // event, and either reports the entry stop or resumes - everything the
+  // `configurationDone` request needs short of the handler's own
+  // PrintIntroductionMessage(). Locks the API mutex internally for its full
+  // duration.
+  llvm::Error ConfigurationDone();
+
+  // The following back the execution-control requests (continue, pause,
+  // next, stepIn, stepInTargets, stepOut) one-to-one. Each locks the API
+  // mutex internally for its full duration.
+  llvm::Expected<dap::protocol::ContinueResponseBody> Continue(const dap::protocol::ContinueArguments &args);
+  llvm::Error Pause();
+  llvm::Error Next(const dap::protocol::NextArguments &args);
+  llvm::Error StepIn(const dap::protocol::StepInArguments &args);
+  llvm::Error StepOut(const dap::protocol::StepOutArguments &args);
+  llvm::Expected<dap::protocol::StepInTargetsResponseBody> GetStepInTargets(
+      const dap::protocol::StepInTargetsArguments &args);
+
+  // Consumes the cached initial_thread_list once (set by ConfigurationDone),
+  // otherwise requires the process to be stopped and lists its threads.
+  llvm::Expected<dap::protocol::ThreadsResponseBody> GetThreadsRequest();
+
+  llvm::Expected<dap::protocol::ExceptionInfoResponseBody> GetExceptionInfoRequest(
+      const dap::protocol::ExceptionInfoArguments &args);
 
   /// Sends target-based capabilities and custom capabilities once the
   /// target is known (see the `configurationDone` handler).

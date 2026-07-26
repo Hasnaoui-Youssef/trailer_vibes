@@ -1,13 +1,7 @@
 //===-- memory_manager.hpp ------------------------------------------------===//
 //
-// The memory component (see CLAUDE.md's DebugContext architecture):
-// strategy pattern over how bytes get read/written. The default strategy
-// reads/writes through the LLDB SB process API; a future AP-based or SVD
-// peripheral strategy can implement the same interface without
-// MemoryManager or its callers changing - see CLAUDE.md's Peripheral View
-// section. Carved out of the read/writeMemory request handlers' inline
-// logic (there was no DebugService::readMemory/writeMemory method to move -
-// see PROJECT_STATUS.md).
+// Strategy pattern over memory access: swap ProcessMemoryStrategy for an
+// AP-based/SVD peripheral strategy without callers changing.
 //
 //===----------------------------------------------------------------------===//
 
@@ -38,11 +32,8 @@ struct MemoryWriteResult {
   uint64_t bytes_written = 0;
 };
 
-/// Strategy interface: one implementation per way of getting at target
-/// memory. MemoryManager holds one of these; it never inlines a specific
-/// access mechanism itself. Preconditions like "is the process stopped" are
-/// a request-validity concern the caller checks itself (via LldbProvider
-/// directly) before calling in - not this strategy's job.
+// One implementation per access mechanism. Preconditions like "is the
+// process stopped" are MemoryManager's job, not the strategy's.
 class MemoryAccessStrategy {
 public:
   virtual ~MemoryAccessStrategy() = default;
@@ -52,7 +43,6 @@ public:
   Write(lldb::addr_t address, llvm::ArrayRef<char> data, bool allow_partial) = 0;
 };
 
-/// Default strategy: the live process' memory via the LLDB SB API.
 class ProcessMemoryStrategy final : public MemoryAccessStrategy {
 public:
   explicit ProcessMemoryStrategy(providers::LldbProvider &lldb_provider)
@@ -69,17 +59,16 @@ private:
 class MemoryManager {
 public:
   explicit MemoryManager(providers::LldbProvider &lldb_provider)
-      : m_strategy(std::make_unique<ProcessMemoryStrategy>(lldb_provider)) {}
+      : m_lldb_provider(lldb_provider),
+        m_strategy(std::make_unique<ProcessMemoryStrategy>(lldb_provider)) {}
 
-  MemoryReadResult ReadMemory(lldb::addr_t address, uint64_t count) {
-    return m_strategy->Read(address, count);
-  }
+  // Checks the process is stopped (under the API mutex) before delegating.
+  llvm::Expected<MemoryReadResult> ReadMemory(lldb::addr_t address, uint64_t count);
   llvm::Expected<MemoryWriteResult>
-  WriteMemory(lldb::addr_t address, llvm::ArrayRef<char> data, bool allow_partial) {
-    return m_strategy->Write(address, data, allow_partial);
-  }
+  WriteMemory(lldb::addr_t address, llvm::ArrayRef<char> data, bool allow_partial);
 
 private:
+  providers::LldbProvider &m_lldb_provider;
   std::unique_ptr<MemoryAccessStrategy> m_strategy;
 };
 

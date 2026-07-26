@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "dap/protocol/protocol_events.hpp"
+#include "dap/json_utils.hpp"
 #include "dap/protocol_support.hpp"
 #include "llvm/Support/JSON.h"
 
@@ -62,6 +63,48 @@ llvm::json::Value toJSON(const MemoryEventBody &MEB) {
       {"memoryReference", EncodeMemoryReference(MEB.memoryReference)},
       {"offset", MEB.offset},
       {"count", MEB.count}};
+}
+
+llvm::json::Value toJSON(const ProcessEventBody &PEB) {
+  json::Object result;
+  EmplaceSafeString(result, "name", PEB.name);
+  result.try_emplace("systemProcessId", (int64_t)PEB.systemProcessId);
+  result.try_emplace("isLocalProcess", PEB.isLocalProcess);
+  result.try_emplace("pointerSize", PEB.pointerSize);
+  result.try_emplace("startMethod", PEB.startMethod);
+  return result;
+}
+
+llvm::json::Value toJSON(const ThreadExitedEventBody &TEB) {
+  return json::Object{{"reason", "exited"}, {"threadId", (int64_t)TEB.threadId}};
+}
+
+llvm::json::Value toJSON(const StoppedEventBody &SEB) {
+  json::Object result;
+  result.try_emplace("reason", SEB.reason);
+  if (SEB.description)
+    EmplaceSafeString(result, "description", *SEB.description);
+  if (SEB.threadId)
+    result.try_emplace("threadId", (int64_t)*SEB.threadId);
+  if (SEB.hitBreakpointIds)
+    result.try_emplace("hitBreakpointIds", json::Array(*SEB.hitBreakpointIds));
+  if (SEB.threadCausedFocus)
+    result.try_emplace("threadCausedFocus", true);
+  result.try_emplace("preserveFocusHint", SEB.preserveFocusHint);
+  result.try_emplace("allThreadsStopped", SEB.allThreadsStopped);
+  return result;
+}
+
+llvm::json::Value toJSON(const ContinuedEventBody &CEB) {
+  return json::Object{{"threadId", (int64_t)CEB.threadId}, {"allThreadsContinued", CEB.allThreadsContinued}};
+}
+
+llvm::json::Value toJSON(const ExitedEventBody &EEB) {
+  return json::Object{{"exitCode", EEB.exitCode}};
+}
+
+llvm::json::Value toJSON(const BreakpointEventBody &BEB) {
+  return json::Object{{"breakpoint", BEB.breakpoint}, {"reason", "changed"}};
 }
 
 } // namespace dap::protocol

@@ -1,18 +1,155 @@
 #include "core/components/data_manager.hpp"
 
+#include <mutex>
+
+#include "core/components/execution_controller.hpp"
+#include "core/components/target_manager.hpp"
 #include "core/debug_context.hpp"
+#include "core/lldb_utils.hpp"
 #include "core/variable_description.hpp"
+#include "dap/dap_error.hpp"
 #include "dap/json_utils.hpp"
+#include "dap/protocol/protocol_events.hpp"
+#include "dap/protocol_support.hpp"
+#include "lldb/API/SBAddress.h"
 #include "lldb/API/SBCommandInterpreter.h"
 #include "lldb/API/SBDeclaration.h"
+#include "lldb/API/SBError.h"
 #include "lldb/API/SBFrame.h"
+#include "lldb/API/SBInstructionList.h"
+#include "lldb/API/SBLineEntry.h"
+#include "lldb/API/SBModule.h"
+#include "lldb/API/SBMutex.h"
+#include "lldb/API/SBProcess.h"
+#include "lldb/API/SBStream.h"
+#include "lldb/API/SBStringList.h"
+#include "lldb/API/SBThread.h"
 #include "lldb/API/SBType.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/FormatVariadic.h"
+#include <array>
+#include <tuple>
 
 namespace core {
+
+namespace {
+
+constexpr int kStackPageSize = 20;
+
+protocol::StackFrame CreateStackFrame(DebugContext &context, lldb::SBFrame &frame, lldb::SBFormat &format) {
+  protocol::StackFrame stack_frame;
+  stack_frame.id = MakeDAPFrameID(frame);
+
+  lldb::SBStream stream;
+  if (format && frame.GetDescriptionWithFormat(format, stream).Success()) {
+    stack_frame.name = llvm::StringRef(stream.GetData(), stream.GetSize());
+  } else if (llvm::StringRef name = frame.GetDisplayFunctionName(); !name.empty()) {
+    stack_frame.name = name;
+  }
+
+  if (stack_frame.name.empty())
+    stack_frame.name = GetLoadAddressString(frame.GetPC());
+
+  // Only append "[opt]" when a custom frame format isn't specified.
+  if (!format && frame.GetFunction().GetIsOptimized())
+    stack_frame.name += " [opt]";
+
+  std::optional<protocol::Source> source = context.ResolveSource(frame);
+  if (source && !IsAssemblySource(*source)) {
+    auto line_entry = frame.GetLineEntry();
+    stack_frame.line = line_entry.GetLine();
+    stack_frame.column = line_entry.GetColumn();
+  } else if (frame.GetSymbol().IsValid()) {
+    // Disassembly fallback: derive the line from the symbol's start address.
+    lldb::SBInstructionList inst_list =
+        context.Target().ReadInstructions(frame.GetSymbol().GetStartAddress(), frame.GetPCAddress(), nullptr);
+    stack_frame.line = inst_list.GetSize() + 1;
+    stack_frame.column = 1;
+  } else {
+    stack_frame.line = 0;
+    stack_frame.column = 0;
+  }
+
+  stack_frame.source = std::move(source);
+  stack_frame.instructionPointerReference = frame.GetPC();
+
+  if (frame.IsArtificial() || frame.IsHidden())
+    stack_frame.presentationHint = protocol::StackFrame::ePresentationHintSubtle;
+  if (const lldb::SBModule module = frame.GetModule()) {
+    if (llvm::StringRef uuid = module.GetUUIDString(); !uuid.empty())
+      stack_frame.moduleId = uuid.str();
+  }
+
+  return stack_frame;
+}
+
+protocol::StackFrame CreateExtendedStackFrameLabel(lldb::SBThread &thread, lldb::SBFormat &format) {
+  protocol::StackFrame stack_frame;
+  lldb::SBStream stream;
+  if (format && thread.GetDescriptionWithFormat(format, stream).Success()) {
+    stack_frame.name = llvm::StringRef(stream.GetData(), stream.GetSize());
+  } else {
+    const uint32_t thread_idx = thread.GetExtendedBacktraceOriginatingIndexID();
+    if (llvm::StringRef queue_name = thread.GetQueueName(); !queue_name.empty())
+      stack_frame.name = llvm::formatv("Enqueued from {0} (Thread {1})", queue_name, thread_idx);
+    else
+      stack_frame.name = llvm::formatv("Thread {0}", thread_idx);
+  }
+
+  stack_frame.id = thread.GetThreadID() + 1;
+  stack_frame.presentationHint = protocol::StackFrame::ePresentationHintLabel;
+  stack_frame.line = 0;
+  stack_frame.column = 0;
+
+  return stack_frame;
+}
+
+// Threads may have runtime-specific extended backtraces attached (e.g.
+// libdispatch queues) - report the thread's own frames first, then a
+// breadth-first walk of any extended backtrace frames, each preceded by a
+// synthetic label frame.
+bool FillStackFrames(DebugContext &context, lldb::SBThread &thread, lldb::SBFormat &frame_format,
+                     std::vector<protocol::StackFrame> &stack_frames, int64_t &offset, const int64_t start_frame,
+                     const int64_t levels, const bool include_all) {
+  bool reached_end_of_stack = false;
+  for (int64_t i = start_frame; static_cast<int64_t>(stack_frames.size()) < levels; i++) {
+    if (i == -1) {
+      stack_frames.emplace_back(CreateExtendedStackFrameLabel(thread, frame_format));
+      continue;
+    }
+
+    lldb::SBFrame frame = thread.GetFrameAtIndex(i);
+    if (!frame.IsValid()) {
+      offset += thread.GetNumFrames() + 1 /* label between threads */;
+      reached_end_of_stack = true;
+      break;
+    }
+
+    stack_frames.emplace_back(CreateStackFrame(context, frame, frame_format));
+  }
+
+  if (include_all && reached_end_of_stack) {
+    for (uint32_t bt = 0; bt < thread.GetProcess().GetNumExtendedBacktraceTypes(); bt++) {
+      lldb::SBThread backtrace = thread.GetExtendedBacktraceThread(thread.GetProcess().GetExtendedBacktraceTypeAtIndex(bt));
+      if (!backtrace.IsValid())
+        continue;
+
+      reached_end_of_stack =
+          FillStackFrames(context, backtrace, frame_format, stack_frames, offset,
+                          (start_frame - offset) > 0 ? start_frame - offset : -1, levels, include_all);
+      if (static_cast<int64_t>(stack_frames.size()) >= levels)
+        break;
+    }
+  }
+
+  return reached_end_of_stack;
+}
+
+}  // namespace
 
 protocol::Scope CreateScope(ScopeKind kind, int64_t variablesReference, int64_t namedVariables,
                             bool expensive) {
@@ -219,6 +356,494 @@ ReplMode DataManager::DetectReplMode(lldb::SBFrame &frame, std::string &expressi
   if (is_variable)
     return ReplMode::Variable;
   return is_command ? ReplMode::Command : ReplMode::Variable;
+}
+
+void DataManager::SetFrameFormat(llvm::StringRef format) {
+  lldb::SBError error;
+  frame_format = lldb::SBFormat(format.str().c_str(), error);
+  if (error.Fail()) {
+    m_context.SendOutput(
+        OutputCategory::Console,
+        llvm::formatv("The provided frame format '{0}' couldn't be parsed: {1}\n", format, error.GetCString())
+            .str());
+  }
+}
+
+void DataManager::SetThreadFormat(llvm::StringRef format) {
+  lldb::SBError error;
+  thread_format = lldb::SBFormat(format.str().c_str(), error);
+  if (error.Fail()) {
+    m_context.SendOutput(
+        OutputCategory::Console,
+        llvm::formatv("The provided thread format '{0}' couldn't be parsed: {1}\n", format, error.GetCString())
+            .str());
+  }
+}
+
+llvm::Expected<protocol::StackTraceResponseBody>
+DataManager::GetStackTraceRequest(const protocol::StackTraceArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
+  if (!thread.IsValid())
+    return llvm::make_error<dap::DAPError>("invalid thread");
+
+  lldb::SBFormat format = frame_format;
+  bool include_all = m_context.Session().configuration.displayExtendedBacktrace;
+
+  if (args.format) {
+    const protocol::StackFrameFormat &requested = *args.format;
+    include_all = requested.includeAll;
+
+    // FIXME: Support "parameterTypes" and "hex".
+    if (requested.module || requested.line || requested.parameters || requested.parameterNames ||
+        requested.parameterValues) {
+      std::string format_str;
+      llvm::raw_string_ostream os(format_str);
+
+      if (requested.module)
+        os << "{${module.file.basename} }";
+      if (requested.line)
+        os << "{${line.file.basename}:${line.number}:${line.column} }";
+      if (requested.parameters || requested.parameterNames || requested.parameterValues)
+        os << "{${function.name-with-args}}";
+      else
+        os << "{${function.name-without-args}}";
+
+      lldb::SBError error;
+      format = lldb::SBFormat(format_str.c_str(), error);
+      if (error.Fail())
+        return ToError(error);
+    }
+  }
+
+  protocol::StackTraceResponseBody body;
+  const int64_t levels = args.levels == 0 ? INT64_MAX : args.levels;
+  int64_t offset = 0;
+  bool reached_end_of_stack =
+      FillStackFrames(m_context, thread, format, body.stackFrames, offset, args.startFrame, levels, include_all);
+  body.totalFrames = args.startFrame + body.stackFrames.size() + (reached_end_of_stack ? 0 : kStackPageSize);
+
+  return body;
+}
+
+protocol::ScopesResponseBody DataManager::GetScopesRequest(const protocol::ScopesArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
+
+  // Selects the frame's thread so LLDB-console commands stay scoped to
+  // whatever frame the client is currently viewing - there's no other event
+  // that tells the GUI (or us) which thread/frame is selected.
+  if (frame.IsValid()) {
+    frame.GetThread().GetProcess().SetSelectedThread(frame.GetThread());
+    frame.GetThread().SetSelectedFrame(frame.GetFrameID());
+  }
+
+  return protocol::ScopesResponseBody{variables.CreateScopes(args.frameId, frame)};
+}
+
+protocol::VariablesResponseBody DataManager::GetVariablesRequest(const protocol::VariablesArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  const uint64_t var_ref = args.variablesReference;
+  const uint64_t count = args.count;
+  const uint64_t start = args.start;
+  const bool hex = args.format ? args.format->hex : false;
+  const bool auto_summaries = m_context.Session().configuration.enableAutoVariableSummaries;
+  const bool synthetic_child_debugging = m_context.Session().configuration.enableSyntheticChildDebugging;
+
+  std::vector<protocol::Variable> result;
+
+  std::optional<ScopeData> scope_data = variables.GetTopLevelScope(var_ref);
+  if (scope_data) {
+    // variablesReference is one of our scopes (args, locals, globals), not
+    // an actual variable.
+    int64_t start_idx = 0;
+    int64_t num_children = 0;
+
+    if (scope_data->kind == eScopeKindRegisters) {
+      // Show pointer-sized registers in the first register set as
+      // eFormatAddressInfo (pointer + what it resolves to), unless a
+      // non-default format was already set for that register.
+      const uint32_t addr_size = m_context.Target().GetProcess().GetAddressByteSize();
+      lldb::SBValue reg_set = scope_data->scope.GetValueAtIndex(0);
+      const uint32_t num_regs = reg_set.GetNumChildren();
+      for (uint32_t reg_idx = 0; reg_idx < num_regs; ++reg_idx) {
+        lldb::SBValue reg = reg_set.GetChildAtIndex(reg_idx);
+        const lldb::Format format = reg.GetFormat();
+        if (format == lldb::eFormatDefault || format == lldb::eFormatHex) {
+          if (reg.GetByteSize() == addr_size)
+            reg.SetFormat(lldb::eFormatAddressInfo);
+        }
+      }
+    }
+
+    num_children = scope_data->scope.GetSize();
+    if (num_children == 0 && scope_data->kind == eScopeKindLocals) {
+      // Surface an SBValueList error (e.g. missing debug info) as a fake
+      // "<error>" variable instead of an empty locals list.
+      lldb::SBError error = scope_data->scope.GetError();
+      if (const char *var_err = error.GetCString()) {
+        protocol::Variable var;
+        var.name = "<error>";
+        var.type = "const char *";
+        var.value = var_err;
+        result.emplace_back(var);
+      }
+    }
+    const int64_t end_idx = start_idx + ((count == 0) ? num_children : count);
+
+    std::map<llvm::StringRef, int> variable_name_counts;
+    for (auto i = start_idx; i < end_idx; ++i) {
+      lldb::SBValue variable = scope_data->scope.GetValueAtIndex(i);
+      if (!variable.IsValid())
+        break;
+      variable_name_counts[GetNonNullVariableName(variable)]++;
+    }
+
+    if (scope_data->kind == eScopeKindLocals) {
+      lldb::SBProcess process = m_context.Target().GetProcess();
+      lldb::SBThread selected_thread = process.GetSelectedThread();
+      lldb::SBValue stop_return_value = selected_thread.GetStopReturnValue();
+
+      if (stop_return_value.IsValid() && selected_thread.GetSelectedFrame().GetFrameID() == 0) {
+        lldb::SBValue renamed_return_value = stop_return_value.Clone("(Return Value)");
+        int64_t return_var_ref = 0;
+
+        if (stop_return_value.MightHaveChildren() || stop_return_value.IsSynthetic())
+          return_var_ref = variables.InsertVariable(stop_return_value, /*is_permanent=*/false);
+
+        result.emplace_back(CreateVariable(renamed_return_value, return_var_ref, hex, auto_summaries,
+                                           synthetic_child_debugging, false));
+      }
+    }
+
+    for (auto i = start_idx; i < end_idx; ++i) {
+      lldb::SBValue variable = scope_data->scope.GetValueAtIndex(i);
+      if (!variable.IsValid())
+        break;
+
+      const int64_t frame_var_ref = variables.InsertVariable(variable, /*is_permanent=*/false);
+      result.emplace_back(CreateVariable(variable, frame_var_ref, hex, auto_summaries, synthetic_child_debugging,
+                                         variable_name_counts[GetNonNullVariableName(variable)] > 1));
+    }
+  } else {
+    // Expanding a variable that has children - return them.
+    lldb::SBValue variable = variables.GetVariable(var_ref);
+    if (variable.IsValid()) {
+      const bool is_permanent = variables.IsPermanentVariableReference(var_ref);
+      auto add_child = [&](lldb::SBValue child, std::optional<llvm::StringRef> custom_name = {}) {
+        if (!child.IsValid())
+          return;
+        const int64_t child_var_ref = variables.InsertVariable(child, is_permanent);
+        result.emplace_back(CreateVariable(child, child_var_ref, hex, auto_summaries, synthetic_child_debugging,
+                                           /*is_name_duplicated=*/false, custom_name));
+      };
+      const int64_t num_children = variable.GetNumChildren();
+      const int64_t end_idx = start + ((count == 0) ? num_children : count);
+      int64_t i = start;
+      for (; i < end_idx && i < num_children; ++i)
+        add_child(variable.GetChildAtIndex(i));
+
+      // If the count quota isn't filled, add a "[raw]" child so the user
+      // can inspect a synthetic member's raw value without the debug console.
+      if (synthetic_child_debugging && variable.IsSynthetic() && i == num_children)
+        add_child(variable.GetNonSyntheticValue(), "[raw]");
+    }
+  }
+
+  return protocol::VariablesResponseBody{std::move(result)};
+}
+
+llvm::Expected<protocol::SetVariableResponseBody>
+DataManager::SetVariableRequest(const protocol::SetVariableArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  const llvm::StringRef args_name = args.name;
+
+  if (args.variablesReference == UINT64_MAX)
+    return llvm::make_error<dap::DAPError>(llvm::formatv("invalid reference {}", args.variablesReference).str(),
+                                           llvm::inconvertibleErrorCode(), /*show_user=*/false);
+
+  constexpr llvm::StringRef return_value_name = "(Return Value)";
+  if (args_name == return_value_name)
+    return llvm::make_error<dap::DAPError>("cannot change the value of the return value");
+
+  lldb::SBValue variable = variables.FindVariable(args.variablesReference, args_name);
+  if (!variable.IsValid())
+    return llvm::make_error<dap::DAPError>("could not find variable in scope");
+
+  lldb::SBError error;
+  if (!variable.SetValueFromCString(args.value.c_str(), error))
+    return llvm::make_error<dap::DAPError>(error.GetCString());
+
+  VariableDescription desc(variable, m_context.Session().configuration.enableAutoVariableSummaries);
+
+  protocol::SetVariableResponseBody body;
+  body.value = desc.display_value;
+  body.type = desc.display_type_name;
+
+  // The index of this variable in our Variables registry is unknown, so
+  // always insert a new one to get its variablesReference.
+  const int64_t new_var_ref = variables.InsertVariable(variable, /*is_permanent=*/false);
+  if (variable.MightHaveChildren()) {
+    body.variablesReference = new_var_ref;
+    if (desc.type_obj.IsArrayType())
+      body.indexedVariables = variable.GetNumChildren();
+    else
+      body.namedVariables = variable.GetNumChildren();
+  }
+
+  if (const lldb::addr_t addr = variable.GetLoadAddress(); addr != LLDB_INVALID_ADDRESS)
+    body.memoryReference = addr;
+
+  if (ValuePointsToCode(variable))
+    body.valueLocationReference = new_var_ref;
+
+  m_context.Execution().SendInvalidatedEvent({protocol::InvalidatedEventBody::eAreaVariables});
+  m_context.Execution().SendMemoryEvent(variable);
+
+  return body;
+}
+
+llvm::Expected<protocol::EvaluateResponseBody>
+DataManager::GetEvaluateRequest(const protocol::EvaluateArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  protocol::EvaluateResponseBody body;
+  lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
+  std::string expression = args.expression;
+  bool repeat_last_command = expression.empty() && last_nonempty_var_expression.empty();
+
+  if (args.context == protocol::eEvaluateContextRepl &&
+      (repeat_last_command || (!expression.empty() && DetectReplMode(frame, expression, false) == ReplMode::Command))) {
+    // Not a variable expression - clear the repeat-last-variable cache.
+    last_nonempty_var_expression.clear();
+    if (frame.IsValid())
+      m_context.Execution().focus_tid = frame.GetThread().GetThreadID();
+
+    bool required_command_failed = false;
+    body.result = RunLLDBCommands(m_context.Lldb().debugger, llvm::StringRef(), {expression}, required_command_failed,
+                                  /*parse_command_directives=*/false, /*echo_commands=*/false);
+    return body;
+  }
+
+  if (args.context == protocol::eEvaluateContextRepl) {
+    if (expression.empty())
+      expression = last_nonempty_var_expression;
+    else
+      last_nonempty_var_expression = expression;
+  }
+
+  // "frame variable" is more reliable and faster than the expression parser,
+  // so always try it first; fall back to full expression evaluation unless
+  // the context is "hover" (too expensive to run arbitrary code there).
+  lldb::SBValue value = frame.GetValueForVariablePath(expression.data(), lldb::eDynamicDontRunTarget);
+
+  // Freeze-dry the value in case the user expands it later in the console.
+  if (value.GetError().Success() && args.context == protocol::eEvaluateContextRepl)
+    value = value.Persist();
+
+  if (value.GetError().Fail() && args.context != protocol::eEvaluateContextHover)
+    value = frame.EvaluateExpression(expression.data());
+
+  if (value.GetError().Fail())
+    return ToError(value.GetError(), /*show_user=*/false);
+
+  const bool hex = args.format ? args.format->hex : false;
+  VariableDescription desc(value, m_context.Session().configuration.enableAutoVariableSummaries, hex);
+
+  body.result = desc.GetResult(args.context);
+  body.type = desc.display_type_name;
+
+  if (value.MightHaveChildren() || ValuePointsToCode(value))
+    body.variablesReference = variables.InsertVariable(value, /*is_permanent=*/args.context == protocol::eEvaluateContextRepl);
+
+  if (lldb::addr_t addr = value.GetLoadAddress(); addr != LLDB_INVALID_ADDRESS)
+    body.memoryReference = dap::EncodeMemoryReference(addr);
+
+  if (ValuePointsToCode(value) && body.variablesReference != LLDB_DAP_INVALID_VAR_REF)
+    body.valueLocationReference = dap::PackLocation(body.variablesReference, true);
+
+  return body;
+}
+
+namespace {
+
+size_t GetLineStartPos(llvm::StringRef text, uint32_t line) {
+  if (line == 0)
+    return llvm::StringRef::npos;
+  if (line == 1)
+    return 0;
+
+  uint32_t cur_line = 1;
+  size_t pos = 0;
+  while (cur_line < line) {
+    const size_t new_line_pos = text.find('\n', pos);
+    if (new_line_pos == llvm::StringRef::npos)
+      return new_line_pos;
+
+    pos = new_line_pos + 1;
+    if (pos >= text.size())
+      return llvm::StringRef::npos;
+
+    cur_line++;
+  }
+
+  return pos;
+}
+
+std::optional<size_t> GetCursorPos(llvm::StringRef text, uint32_t line, uint32_t utf16_codeunits) {
+  if (text.empty())
+    return std::nullopt;
+
+  const size_t line_start_pos = GetLineStartPos(text, line);
+  if (line_start_pos == llvm::StringRef::npos)
+    return std::nullopt;
+
+  const llvm::StringRef completion_line = text.substr(line_start_pos, text.find('\n', line_start_pos));
+  if (completion_line.empty())
+    return std::nullopt;
+
+  const std::optional<size_t> cursor_pos_opt = dap::UTF16CodeunitToBytes(completion_line, utf16_codeunits);
+  if (!cursor_pos_opt)
+    return std::nullopt;
+
+  return line_start_pos + *cursor_pos_opt;
+}
+
+size_t GetPartialTokenCodeUnits(llvm::StringRef line, size_t cursor_pos) {
+  line = line.substr(0, cursor_pos);
+  const size_t idx = line.rfind(' ');
+
+  const llvm::StringRef byte_token = line.substr(idx == llvm::StringRef::npos ? 0 : idx + 1);
+  llvm::SmallVector<llvm::UTF16, 20> utf16_token;
+  if (llvm::convertUTF8ToUTF16String(byte_token, utf16_token))
+    return utf16_token.size();
+  return byte_token.size(); // Fallback to byte offset.
+}
+
+}  // namespace
+
+protocol::CompletionsResponseBody DataManager::GetCompletionsRequest(const protocol::CompletionsArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  std::string text = args.text;
+  const uint32_t line = args.line;
+  const uint32_t utf16_codeunits = args.column - 1; // column starts at 1.
+
+  const auto cursor_pos_opt = GetCursorPos(text, line, utf16_codeunits);
+  if (!cursor_pos_opt)
+    return protocol::CompletionsResponseBody{};
+
+  size_t cursor_pos = *cursor_pos_opt;
+
+  // If there's a frame, set it as selected so LLDB completes relative to it.
+  lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
+  if (frame.IsValid()) {
+    lldb::SBThread frame_thread = frame.GetThread();
+    frame_thread.GetProcess().SetSelectedThread(frame_thread);
+    frame_thread.SetSelectedFrame(frame.GetFrameID());
+  }
+
+  const llvm::StringRef escape_prefix = m_context.Session().configuration.commandEscapePrefix;
+  const bool had_escape_prefix = llvm::StringRef(text).starts_with(escape_prefix);
+  const ReplMode mode = DetectReplMode(frame, text, true);
+  if (had_escape_prefix) {
+    if (cursor_pos < escape_prefix.size())
+      return protocol::CompletionsResponseBody{};
+    cursor_pos -= escape_prefix.size();
+  }
+
+  const size_t partial_token_cu = GetPartialTokenCodeUnits(text, cursor_pos);
+  // While the user is mid-input, intent (command vs variable) is often
+  // ambiguous - try completing as both, where applicable.
+  const std::string expr_prefix = "expression -- ";
+  const std::array<std::tuple<ReplMode, std::string, uint64_t>, 2> exprs = {
+      {std::make_tuple(ReplMode::Command, text, cursor_pos),
+       std::make_tuple(ReplMode::Variable, expr_prefix + text, cursor_pos + expr_prefix.size())}};
+
+  protocol::CompletionsResponseBody response;
+  lldb::SBCommandInterpreter interpreter = m_context.Lldb().debugger.GetCommandInterpreter();
+  for (const auto &[expr_mode, expr_line, expr_cursor] : exprs) {
+    if (mode != ReplMode::Auto && mode != expr_mode)
+      continue;
+
+    lldb::SBStringList matches;
+    lldb::SBStringList descriptions;
+    if (!interpreter.HandleCompletionWithDescriptions(expr_line.c_str(), expr_cursor, 0, 50, matches, descriptions))
+      continue;
+
+    // Element 0 is the common substring after the cursor for all matches -
+    // skip it and use the rest.
+    for (uint32_t i = 1; i < matches.GetSize(); i++) {
+      const llvm::StringRef match = matches.GetStringAtIndex(i);
+      const llvm::StringRef description = descriptions.GetStringAtIndex(i);
+
+      protocol::CompletionItem item;
+      item.label = match;
+      if (!description.empty())
+        item.detail = description;
+      item.length = partial_token_cu; // Overwrite lldb's own partial-token length.
+
+      response.targets.emplace_back(std::move(item));
+    }
+  }
+
+  return response;
+}
+
+llvm::Expected<protocol::LocationsResponseBody>
+DataManager::GetLocationsRequest(const protocol::LocationsArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  protocol::LocationsResponseBody response;
+  // The lowest bit distinguishes a value location from a declaration location.
+  auto [var_ref, is_value_location] = dap::UnpackLocation(args.locationReference);
+  lldb::SBValue variable = variables.GetVariable(var_ref);
+  if (!variable.IsValid())
+    return llvm::make_error<dap::DAPError>("Invalid variable reference");
+
+  if (is_value_location) {
+    if (!variable.GetType().IsPointerType() && !variable.GetType().IsReferenceType())
+      return llvm::make_error<dap::DAPError>("Value locations are only available for pointers and references");
+
+    lldb::addr_t raw_addr = variable.GetValueAsAddress();
+    lldb::SBAddress addr = m_context.Target().ResolveLoadAddress(raw_addr);
+    lldb::SBLineEntry line_entry = GetLineEntryForAddress(m_context.Target(), addr);
+    if (!line_entry.IsValid())
+      return llvm::make_error<dap::DAPError>("Failed to resolve line entry for location");
+
+    std::optional<protocol::Source> source = CreateSource(line_entry.GetFileSpec());
+    if (!source)
+      return llvm::make_error<dap::DAPError>("Failed to resolve file path for location");
+
+    response.source = std::move(*source);
+    response.line = line_entry.GetLine();
+    response.column = line_entry.GetColumn();
+  } else {
+    lldb::SBDeclaration decl = variable.GetDeclaration();
+    if (!decl.IsValid())
+      return llvm::make_error<dap::DAPError>("No declaration location available");
+
+    std::optional<protocol::Source> source = CreateSource(decl.GetFileSpec());
+    if (!source)
+      return llvm::make_error<dap::DAPError>("Failed to resolve file path for location");
+
+    response.source = std::move(*source);
+    response.line = decl.GetLine();
+    response.column = decl.GetColumn();
+  }
+
+  return response;
 }
 
 protocol::Variable CreateVariable(lldb::SBValue v, int64_t var_ref, bool format_hex, bool auto_variable_summaries,

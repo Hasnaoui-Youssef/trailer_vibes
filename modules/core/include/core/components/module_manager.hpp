@@ -13,12 +13,14 @@
 #include <optional>
 #include <vector>
 
+#include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
 #include "lldb/API/SBAddress.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBModule.h"
 #include "lldb/lldb-types.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/Error.h"
 #include "lldb_provider/lldb_provider.hpp"
 
 namespace core {
@@ -41,6 +43,13 @@ public:
   /// initializes only the module ID, used when reporting a "removed"
   /// module event.
   std::optional<dap::protocol::Module> CreateModuleDescription(lldb::SBModule &module, bool id_only = false);
+
+  llvm::Expected<dap::protocol::CompileUnitsResponseBody> GetCompileUnitsRequest(
+      const std::optional<dap::protocol::CompileUnitsArguments> &args);
+  llvm::Expected<dap::protocol::ModulesResponseBody> GetModulesRequest(
+      const std::optional<dap::protocol::ModulesArguments> &args);
+  llvm::Expected<dap::protocol::ModuleSymbolsResponseBody> GetModuleSymbolsRequest(
+      const dap::protocol::ModuleSymbolsArguments &args);
 
   /// The set of module IDs the client has already been told about (see the
   /// `modules` request handler - it reports newly-seen modules and needs to

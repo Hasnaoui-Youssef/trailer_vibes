@@ -5,17 +5,19 @@
 #include <system_error>
 
 #include "dap/dap_error.hpp"
-#include "dap/json_utils.hpp"
 #include "lldb/API/SBCommandInterpreter.h"
 #include "lldb/API/SBCommandReturnObject.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBStringList.h"
 #include "lldb/API/SBStructuredData.h"
 #include "lldb/API/SBSymbolContext.h"
+#include "lldb/API/SBThread.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace core {
 
@@ -103,6 +105,10 @@ bool IsAssemblySource(const dap::protocol::Source &source) {
 namespace {
 constexpr uint32_t kThreadIndexShift = 19;
 }  // namespace
+
+uint64_t MakeDAPFrameID(lldb::SBFrame &frame) {
+  return (static_cast<uint64_t>(frame.GetThread().GetIndexID()) << kThreadIndexShift) | frame.GetFrameID();
+}
 
 uint32_t GetLLDBThreadIndexID(uint64_t dap_frame_id) { return dap_frame_id >> kThreadIndexShift; }
 
@@ -264,29 +270,26 @@ void FilterAndGetValueForKey(const lldb::SBStructuredData data, const char *key,
   }
 }
 
-void AddStatistic(lldb::SBTarget &target, llvm::json::Object &event) {
+}  // namespace
+
+std::string BuildTerminatedStatisticsJSON(lldb::SBTarget &target) {
   lldb::SBStructuredData statistics = target.GetStatistics();
   if (statistics.GetType() != lldb::eStructuredDataTypeDictionary)
-    return;
-  llvm::json::Object stats_body;
+    return {};
 
+  llvm::json::Object stats_body;
   lldb::SBStringList keys;
   if (!statistics.GetKeys(keys))
-    return;
+    return {};
   for (size_t i = 0; i < keys.GetSize(); i++) {
     const char *key = keys.GetStringAtIndex(i);
     FilterAndGetValueForKey(statistics, key, stats_body);
   }
-  llvm::json::Object body{{"$__lldb_statistics", std::move(stats_body)}};
-  event.try_emplace("body", std::move(body));
-}
 
-}  // namespace
-
-llvm::json::Object CreateTerminatedEventObject(lldb::SBTarget &target) {
-  llvm::json::Object event(dap::CreateEventObject("terminated"));
-  AddStatistic(target, event);
-  return event;
+  std::string json_str;
+  llvm::raw_string_ostream os(json_str);
+  os << llvm::json::Value(std::move(stats_body));
+  return json_str;
 }
 
 }  // namespace core

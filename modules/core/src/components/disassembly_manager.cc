@@ -4,12 +4,18 @@
 #include <optional>
 #include <string>
 
+#include <mutex>
+
 #include "core/debug_context.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
 #include "lldb/API/SBAddress.h"
+#include "lldb/API/SBExecutionContext.h"
 #include "lldb/API/SBInstruction.h"
 #include "lldb/API/SBLineEntry.h"
+#include "lldb/API/SBMutex.h"
+#include "lldb/API/SBStream.h"
+#include "lldb/API/SBSymbol.h"
 #include "lldb/API/SBTarget.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Error.h"
@@ -198,6 +204,38 @@ DisassemblyManager::Disassemble(lldb::addr_t memory_reference, int64_t byte_offs
     instructions.push_back(GetInvalidInstruction());
 
   return instructions;
+}
+
+llvm::Expected<protocol::SourceResponseBody>
+DisassemblyManager::GetSourceRequest(const protocol::SourceArguments &args) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  const uint32_t source_ref =
+      args.source ? args.source->sourceReference.value_or(args.sourceReference) : args.sourceReference;
+  const std::optional<lldb::addr_t> source_addr_opt = m_context.GetSourceReferenceAddress(source_ref);
+  if (!source_addr_opt)
+    return llvm::make_error<dap::DAPError>(llvm::formatv("unknown source reference {}", source_ref));
+
+  lldb::SBAddress address(*source_addr_opt, m_context.Target());
+  if (!address.IsValid())
+    return llvm::make_error<dap::DAPError>("source not found");
+
+  lldb::SBSymbol symbol = address.GetSymbol();
+  lldb::SBInstructionList insts;
+  if (symbol.IsValid())
+    insts = symbol.GetInstructions(m_context.Target());
+  else
+    insts = m_context.Target().ReadInstructions(address, k_number_of_assembly_lines_for_nodebug);
+
+  if (!insts || insts.GetSize() == 0)
+    return llvm::make_error<dap::DAPError>(
+        llvm::formatv("no instruction source for address {}", address.GetLoadAddress(m_context.Target())));
+
+  lldb::SBStream stream;
+  lldb::SBExecutionContext exe_ctx(m_context.Target());
+  insts.GetDescription(stream, exe_ctx);
+  return protocol::SourceResponseBody{/*content=*/stream.GetData(), /*mimeType=*/"text/x-lldb.disassembly"};
 }
 
 }  // namespace core

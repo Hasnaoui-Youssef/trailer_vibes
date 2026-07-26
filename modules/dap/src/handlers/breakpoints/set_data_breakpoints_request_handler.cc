@@ -6,11 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "core/components/watchpoint.hpp"
-#include "debug_service/debug_service.hpp"
+#include "core/components/breakpoint_manager.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
-#include <set>
 
 namespace dap {
 
@@ -22,28 +20,7 @@ namespace dap {
 llvm::Expected<protocol::SetDataBreakpointsResponseBody>
 SetDataBreakpointsRequestHandler::Run(
     const protocol::SetDataBreakpointsArguments &args) const {
-  std::vector<protocol::Breakpoint> response_breakpoints;
-
-  dap.target.DeleteAllWatchpoints();
-  std::vector<core::Watchpoint> watchpoints;
-  for (const auto &bp : args.breakpoints)
-    watchpoints.emplace_back(dap.Context(), bp);
-
-  // If two watchpoints start at the same address, the latter overwrite the
-  // former. So, we only enable those at first-seen addresses when iterating
-  // backward.
-  std::set<lldb::addr_t> addresses;
-  for (auto iter = watchpoints.rbegin(); iter != watchpoints.rend(); ++iter) {
-    if (addresses.count(iter->GetAddress()) == 0) {
-      iter->SetWatchpoint();
-      addresses.insert(iter->GetAddress());
-    }
-  }
-  for (auto wp : watchpoints)
-    response_breakpoints.push_back(wp.ToProtocolBreakpoint());
-
-  return protocol::SetDataBreakpointsResponseBody{
-      std::move(response_breakpoints)};
+  return context_.Breakpoints().SetDataBreakpoints(args);
 }
 
 } // namespace dap

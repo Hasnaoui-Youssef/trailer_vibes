@@ -7,12 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "core/components/target_manager.hpp"
-#include "debug_service/debug_service.hpp"
-#include "debug_service/json_utils.hpp"
-#include "debug_service/lldb_utils.hpp"
 #include "dap/protocol/protocol_requests.hpp"
+#include "handlers/capabilities.hpp"
 #include "handlers/request_handler.hpp"
-#include "lldb/API/SBTarget.h"
 
 using namespace dap;
 using namespace dap::protocol;
@@ -21,8 +18,8 @@ using namespace dap::protocol;
 llvm::Expected<InitializeResponse> InitializeRequestHandler::Run(
     const InitializeRequestArguments &arguments) const {
   // Store initialization arguments for later use in Launch/Attach.
-  dap.clientFeatures = arguments.supportedFeatures;
-  dap.Context().Session().source_init_file = arguments.lldbExtSourceInitFile;
+  orchestrator_.SetClientFeatures(arguments.supportedFeatures);
+  context_.Session().source_init_file = arguments.lldbExtSourceInitFile;
 
-  return dap.GetCapabilities();
+  return AssembleCapabilities(orchestrator_, context_);
 }

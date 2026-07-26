@@ -6,21 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "debug_service/debug_service.hpp"
+#include "core/components/breakpoint_manager.hpp"
+#include "core/components/function_breakpoint.hpp"
 #include "handlers/request_handler.hpp"
 
 namespace dap {
 
-/// Replaces all existing function breakpoints with new function breakpoints.
-/// To clear all function breakpoints, specify an empty array.
-/// When a function breakpoint is hit, a stopped event (with reason function
-/// breakpoint) is generated. Clients should only call this request if the
-/// corresponding capability supportsFunctionBreakpoints is true.
 llvm::Expected<protocol::SetFunctionBreakpointsResponseBody>
 SetFunctionBreakpointsRequestHandler::Run(
     const protocol::SetFunctionBreakpointsArguments &args) const {
   std::vector<protocol::Breakpoint> response_breakpoints;
-  core::BreakpointManager &breakpoints = dap.Context().Breakpoints();
+  core::BreakpointManager &breakpoints = context_.Breakpoints();
 
   // Disable any function breakpoints that aren't in this request.
   // There is no call to remove function breakpoints other than calling this
@@ -28,9 +24,9 @@ SetFunctionBreakpointsRequestHandler::Run(
   const auto name_iter = breakpoints.function_breakpoints.keys();
   llvm::DenseSet<llvm::StringRef> seen(name_iter.begin(), name_iter.end());
   for (const auto &fb : args.breakpoints) {
-    core::FunctionBreakpoint fn_bp(dap.Context(), fb);
+    core::FunctionBreakpoint fn_bp(context_, fb);
     const auto [it, inserted] =
-        breakpoints.function_breakpoints.try_emplace(fn_bp.GetFunctionName(), dap.Context(), fb);
+        breakpoints.function_breakpoints.try_emplace(fn_bp.GetFunctionName(), context_, fb);
     if (inserted)
       it->second.SetBreakpoint();
     else
@@ -45,7 +41,7 @@ SetFunctionBreakpointsRequestHandler::Run(
     auto fn_bp = breakpoints.function_breakpoints.find(name);
     if (fn_bp == breakpoints.function_breakpoints.end())
       continue;
-    dap.target.BreakpointDelete(fn_bp->second.GetID());
+    context_.Target().BreakpointDelete(fn_bp->second.GetID());
     breakpoints.function_breakpoints.erase(name);
   }
 

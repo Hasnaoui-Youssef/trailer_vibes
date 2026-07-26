@@ -20,63 +20,50 @@ Transport::Transport(int in_fd, int out_fd) : in_fd_(in_fd), out_fd_(out_fd) {}
 
 bool Transport::ReadHeaderLine(std::string &line) {
     for (;;) {
-        const size_t newline = read_buffer_.find('\n', read_pos_);
-        if (newline != std::string::npos) {
-            line.assign(read_buffer_, read_pos_, newline - read_pos_);
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            read_pos_ = newline + 1;
+        const size_t crlf_pos = read_buffer_.find("\r\n", read_pos_);
+        if (crlf_pos != std::string::npos) {
+            line.assign(read_buffer_, read_pos_, crlf_pos - read_pos_);
+            read_pos_ = crlf_pos + 1;
             return true;
         }
 
-        // No newline buffered yet: drop the already-consumed prefix so the
-        // buffer doesn't grow unboundedly across many small reads, then
-        // pull more bytes in.
         read_buffer_.erase(0, read_pos_);
         read_pos_ = 0;
 
         char chunk[kReadChunkSize];
         const ssize_t n = read(in_fd_, chunk, sizeof(chunk));
         if (n <= 0) {
-            return false;  // EOF or error.
+            return false;
         }
         read_buffer_.append(chunk, static_cast<size_t>(n));
     }
 }
 
 std::optional<llvm::json::Value> Transport::ReadMessage() {
-    // Consume header lines through the blank line that ends them, tracking
-    // Content-Length along the way. It's the only header this adapter emits
-    // or needs to honor; any other header line is ignored per the DAP/LSP
-    // framing spec's "unknown headers are ignored" guidance.
     std::optional<size_t> content_length;
     std::string line;
     while (ReadHeaderLine(line)) {
         if (line.empty()) {
-            break;  // Blank line: end of headers.
+            break;
         }
-        if (line.size() > kContentLengthHeader.size() &&
-            std::string_view(line).substr(0, kContentLengthHeader.size()) == kContentLengthHeader) {
-            std::string_view value(line);
+        if (auto value = std::string_view{line};
+            value.starts_with(kContentLengthHeader)) {
             value.remove_prefix(kContentLengthHeader.size());
             while (!value.empty() && value.front() == ' ') {
                 value.remove_prefix(1);
             }
             size_t parsed = 0;
-            const std::from_chars_result result = std::from_chars(value.data(), value.data() + value.size(), parsed);
-            if (result.ec == std::errc()) {
+            const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (ec == std::errc{} && ptr == value.data() + value.size()) {
                 content_length = parsed;
             }
         }
     }
     if (!content_length) {
-        return std::nullopt;  // EOF before a full header block, or no Content-Length seen.
+        return std::nullopt;
     }
 
-    // Read exactly *content_length body bytes, first draining whatever's
-    // already buffered past the header block before pulling more from the
-    // descriptor.
+    // drain what's buffered past the header block before pulling more from the descriptor
     std::string body;
     body.reserve(*content_length);
     const size_t buffered = read_buffer_.size() - read_pos_;
@@ -89,7 +76,7 @@ std::optional<llvm::json::Value> Transport::ReadMessage() {
         char chunk[kReadChunkSize];
         const ssize_t n = read(in_fd_, chunk, std::min(remaining, sizeof(chunk)));
         if (n <= 0) {
-            return std::nullopt;  // EOF mid-body.
+            return std::nullopt;
         }
         body.append(chunk, static_cast<size_t>(n));
         remaining -= static_cast<size_t>(n);
@@ -107,7 +94,7 @@ bool Transport::WriteMessage(const llvm::json::Value &message) {
     std::string body;
     llvm::raw_string_ostream(body) << message;
 
-    const std::string framed = "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    const std::string framed = std::format("{} {}\r\n\r\n{}",kContentLengthHeader ,body.size(), body);
 
     size_t written = 0;
     while (written < framed.size()) {

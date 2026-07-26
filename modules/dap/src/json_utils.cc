@@ -10,6 +10,7 @@
 
 #include "dap/protocol/protocol_base.hpp"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -130,5 +131,33 @@ std::string JSONToString(const llvm::json::Value &json) {
 int64_t PackLocation(int64_t var_ref, bool is_value_location) { return var_ref << 1 | is_value_location; }
 
 std::pair<int64_t, bool> UnpackLocation(int64_t location_id) { return std::pair{location_id >> 1, location_id & 1}; }
+
+std::optional<size_t> UTF16CodeunitToBytes(llvm::StringRef line, uint32_t utf16_codeunits) {
+    size_t bytes_count = 0;
+    size_t utf16_seen_cu = 0;
+    size_t idx = 0;
+    const size_t line_size = line.size();
+
+    while (idx < line_size && utf16_seen_cu < utf16_codeunits) {
+        const auto num_bytes = llvm::getNumBytesForUTF8(line[idx]);
+
+        if (num_bytes == 4)
+            utf16_seen_cu += 2;
+        else if (num_bytes < 4)
+            utf16_seen_cu += 1;
+        else
+            return std::nullopt; // Not valid UTF8.
+
+        idx += num_bytes;
+        if (utf16_seen_cu <= utf16_codeunits) {
+            bytes_count = idx;
+        } else {
+            // utf16_codeunits ends in the middle of a codepoint.
+            return std::nullopt;
+        }
+    }
+
+    return bytes_count;
+}
 
 }  // namespace dap

@@ -7,14 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "core/components/execution_controller.hpp"
-#include "debug_service/debug_service.hpp"
-#include "debug_service/lldb_utils.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
-#include "llvm/Support/Error.h"
-
-using namespace llvm;
-using namespace dap::protocol;
 
 namespace dap {
 
@@ -28,22 +22,8 @@ namespace dap {
 ///
 /// The debug adapter first sends the response and then a `stopped` event (with
 /// reason `step`) after the step has completed."
-Error StepOutRequestHandler::Run(const StepOutArguments &arguments) const {
-  lldb::SBThread thread = dap.Context().GetLLDBThread(arguments.threadId);
-  if (!thread.IsValid())
-    return make_error<DAPError>("invalid thread");
-
-  if (!lldb::SBDebugger::StateIsStoppedState(
-          dap.target.GetProcess().GetState()))
-    return make_error<NotStoppedError>();
-
-  // Remember the thread ID that caused the resume so we can set the
-  // "threadCausedFocus" boolean value in the "stopped" events.
-  dap.Context().Execution().focus_tid = thread.GetThreadID();
-  lldb::SBError error;
-  thread.StepOut(error);
-
-  return ToError(error);
+llvm::Error StepOutRequestHandler::Run(const protocol::StepOutArguments &arguments) const {
+  return context_.Execution().StepOut(arguments);
 }
 
 } // namespace dap

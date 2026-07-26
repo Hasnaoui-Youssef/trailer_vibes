@@ -7,23 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "core/components/breakpoint.hpp"
-#include "debug_service/debug_service.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
 
 using namespace dap;
 using namespace dap::protocol;
 
-/// A request used in testing to get the details on all breakpoints that are
-/// currently set in the target. This helps us to test "setBreakpoints" and
-/// "setFunctionBreakpoints" requests to verify we have the correct set of
-/// breakpoints currently set in LLDB.
 llvm::Expected<TestGetTargetBreakpointsResponseBody>
 TestGetTargetBreakpointsRequestHandler::Run(
     const TestGetTargetBreakpointsArguments &args) const {
   std::vector<protocol::Breakpoint> breakpoints;
-  for (uint32_t i = 0; dap.target.GetBreakpointAtIndex(i).IsValid(); ++i) {
-    auto bp = core::Breakpoint(dap.Context(), dap.target.GetBreakpointAtIndex(i));
+  for (uint32_t i = 0; context_.Target().GetBreakpointAtIndex(i).IsValid(); ++i) {
+    auto bp = core::Breakpoint(context_, context_.Target().GetBreakpointAtIndex(i));
     breakpoints.push_back(bp.ToProtocolBreakpoint());
   }
   return TestGetTargetBreakpointsResponseBody{std::move(breakpoints)};

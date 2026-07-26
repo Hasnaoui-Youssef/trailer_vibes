@@ -86,6 +86,11 @@ int64_t PackLocation(int64_t var_ref, bool is_value_location);
 /// Reverse of `PackLocation`.
 std::pair<int64_t, bool> UnpackLocation(int64_t location_id);
 
+/// Converts a UTF16 codeunit offset (as DAP columns are specified) into a
+/// byte offset into `line` (UTF8). Returns nullopt if `utf16_codeunits`
+/// falls in the middle of a codepoint or `line` isn't valid UTF8.
+std::optional<size_t> UTF16CodeunitToBytes(llvm::StringRef line, uint32_t utf16_codeunits);
+
 }  // namespace dap
 
 #endif  // TRAILER_DAP_JSON_UTILS_HPP_

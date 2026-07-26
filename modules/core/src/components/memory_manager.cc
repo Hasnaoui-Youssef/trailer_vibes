@@ -1,14 +1,34 @@
 #include "core/components/memory_manager.hpp"
 
 #include <algorithm>
+#include <mutex>
 
 #include "dap/dap_error.hpp"
+#include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBMemoryRegionInfo.h"
+#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBProcess.h"
 #include "llvm/ADT/StringExtras.h"
 
 namespace core {
+
+llvm::Expected<MemoryReadResult> MemoryManager::ReadMemory(lldb::addr_t address, uint64_t count) {
+  lldb::SBMutex lock = m_lldb_provider.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+  if (!lldb::SBDebugger::StateIsStoppedState(m_lldb_provider.target.GetProcess().GetState()))
+    return llvm::make_error<dap::NotStoppedError>();
+  return m_strategy->Read(address, count);
+}
+
+llvm::Expected<MemoryWriteResult>
+MemoryManager::WriteMemory(lldb::addr_t address, llvm::ArrayRef<char> data, bool allow_partial) {
+  lldb::SBMutex lock = m_lldb_provider.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+  if (!lldb::SBDebugger::StateIsStoppedState(m_lldb_provider.target.GetProcess().GetState()))
+    return llvm::make_error<dap::NotStoppedError>();
+  return m_strategy->Write(address, data, allow_partial);
+}
 
 MemoryReadResult ProcessMemoryStrategy::Read(lldb::addr_t address, uint64_t count) {
   const uint64_t count_read = std::max<uint64_t>(count, 1);

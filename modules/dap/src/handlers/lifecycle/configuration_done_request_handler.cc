@@ -7,12 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "core/components/execution_controller.hpp"
-#include "core/components/target_manager.hpp"
-#include "debug_service/debug_service.hpp"
-#include "debug_service/lldb_utils.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "handlers/request_handler.hpp"
-#include "lldb/API/SBDebugger.h"
 
 using namespace llvm;
 using namespace dap::protocol;
@@ -29,51 +25,20 @@ namespace dap {
 /// `supportsConfigurationDoneRequest` is true.
 llvm::Error
 ConfigurationDoneRequestHandler::Run(const ConfigurationDoneArguments &) const {
-  dap.Context().Execution().configuration_done = true;
-
-  // Ensure any command scripts did not leave us in an unexpected state.
-  lldb::SBProcess process = dap.target.GetProcess();
-  if (!process.IsValid() ||
-      !lldb::SBDebugger::StateIsStoppedState(process.GetState()))
-    return make_error<DAPError>(
-        "Expected process to be stopped.\r\n\r\nProcess is in an unexpected "
-        "state and may have missed an initial configuration. Please check that "
-        "any debugger command scripts are not resuming the process during the "
-        "launch sequence.");
-
-  // Waiting until 'configurationDone' to send target based capabilities in case
-  // the launch or attach scripts adjust the target. The initial dummy target
-  // may have different capabilities than the final target.
-
-  /// Also send here custom capabilities to the client, which is consumed by the
-  /// lldb-dap specific editor extension.
-  dap.Context().Execution().SendExtraCapabilities();
-
+  Error err = context_.Execution().ConfigurationDone();
+  // Printed regardless of the outcome above, matching the original
+  // ordering: the introduction message only depends on the target/process
+  // already being set up (done during launch/attach), not on anything
+  // ConfigurationDone() itself does.
   PrintIntroductionMessage();
-
-  // Clients can request a baseline of currently existing threads after
-  // we acknowledge the configurationDone request.
-  // Client requests the baseline of currently existing threads after
-  // a successful or attach by sending a 'threads' request
-  // right after receiving the configurationDone response.
-  // Obtain the list of threads before we resume the process
-  dap.initial_thread_list = core::GetThreads(process, dap.thread_format);
-
-  dap.Context().Execution().SendProcessEvent(dap.Context().Session().is_attach ? core::Attach : core::Launch);
-
-  if (dap.Context().Execution().stop_at_entry)
-    return dap.Context().Execution().SendThreadStoppedEvent(/*on_entry=*/true);
-
-  return ToError(process.Continue());
+  return err;
 }
 
 void ConfigurationDoneRequestHandler::PostRun() const {
-  if (!dap.on_configuration_done)
-    return;
-
-  dap.on_configuration_done();
-  // Clear the callback to ensure any captured resources are released.
-  dap.on_configuration_done = nullptr;
+  // Runs (and clears) the launch/attach handler's deferred response, if one
+  // is pending - see DelayedResponseRequestHandler in
+  // handlers/request_handler.hpp. A no-op if none is pending.
+  orchestrator_.RunDeferredConfigurationResponse();
 }
 
 } // namespace dap

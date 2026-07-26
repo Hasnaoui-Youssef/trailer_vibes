@@ -26,6 +26,7 @@
 #include "lldb/lldb-types.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/Threading.h"
 
 namespace core {
@@ -47,6 +48,26 @@ public:
   std::vector<protocol::Breakpoint> SetSourceBreakpoints(
       const protocol::Source &source,
       const std::optional<std::vector<protocol::SourceBreakpoint>> &breakpoints);
+
+  /// Returns all possible source-breakpoint locations in the requested
+  /// range (see the `breakpointLocations` request).
+  protocol::BreakpointLocationsResponseBody GetBreakpointLocations(
+      const protocol::BreakpointLocationsArguments &args);
+
+  /// Replaces all existing instruction breakpoints with the given ones (see
+  /// the `setInstructionBreakpoints` request).
+  protocol::SetInstructionBreakpointsResponseBody SetInstructionBreakpoints(
+      const protocol::SetInstructionBreakpointsArguments &args);
+
+  /// Replaces all existing data breakpoints (watchpoints) with the given
+  /// ones (see the `setDataBreakpoints` request).
+  protocol::SetDataBreakpointsResponseBody SetDataBreakpoints(
+      const protocol::SetDataBreakpointsArguments &args);
+
+  /// Obtains information on a possible data breakpoint that could be set on
+  /// an expression or variable (see the `dataBreakpointInfo` request).
+  llvm::Expected<protocol::DataBreakpointInfoResponseBody> GetDataBreakpointInfo(
+      const protocol::DataBreakpointInfoArguments &args);
 
   void PopulateExceptionBreakpoints();
   ExceptionBreakpoint *GetExceptionBreakpoint(llvm::StringRef filter);

@@ -166,7 +166,7 @@ bool fromJSON(const json::Value &Params, PathFormat &PF, json::Path P) {
 
   std::optional<PathFormat> pathFormat =
       StringSwitch<std::optional<PathFormat>>(*rawPathFormat)
-          .Case("path", ePatFormatPath)
+          .Case("path", ePathFormatPath)
           .Case("uri", ePathFormatURI)
           .Default(std::nullopt);
   if (!pathFormat) {

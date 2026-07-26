@@ -1,19 +1,9 @@
 //===-- data_manager.hpp ---------------------------------------------------===//
 //
-// The data component (see CLAUDE.md's DebugContext architecture): variables/
-// scopes/evaluate support and the REPL-mode heuristic. Named "Data" rather
-// than "Inspection" because it also owns core registers (exposed through
-// the same Variables registry, via the eScopeKindRegisters scope) - not
-// just source-level variables. Carved out of DebugService - see
-// PROJECT_STATUS.md.
-//
-// frame_format/thread_format stay on DebugService for now even though the
-// original decomposition table put them here: they're read by handlers
-// spanning Target/lifecycle (configurationDone), thread listing and this
-// component's own stack-trace formatting, and DebugService's
-// SetConfiguration (a TargetManager-domain method not carved yet) is what
-// sets them - moving them now would mean picking an owner before
-// TargetManager exists. Revisit when TargetManager is carved.
+// Variables/scopes/evaluate support, the REPL-mode heuristic, and stack
+// trace/thread formatting. Named "Data" rather than "Inspection": it also
+// owns core registers, via the Variables registry's eScopeKindRegisters
+// scope.
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,12 +16,15 @@
 #include <utility>
 #include <vector>
 
+#include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
+#include "lldb/API/SBFormat.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBValue.h"
 #include "lldb/API/SBValueList.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
 
 namespace core {
 
@@ -150,11 +143,33 @@ public:
   Variables variables;
   ReplMode repl_mode = ReplMode::Auto;
   std::string last_nonempty_var_expression;
+  lldb::SBFormat frame_format;
+  lldb::SBFormat thread_format;
 
   /// Decides whether `expression` (from the debug console REPL) should be
   /// run as an LLDB command or evaluated as a variable/expression. May
   /// strip a leading command-escape prefix from `expression` in place.
   ReplMode DetectReplMode(lldb::SBFrame &frame, std::string &expression, bool partial_expression);
+
+  /// Parses a custom frame/thread format string, reporting a parse failure
+  /// to the debug console. See TargetManager::SetConfiguration.
+  void SetFrameFormat(llvm::StringRef format);
+  void SetThreadFormat(llvm::StringRef format);
+
+  llvm::Expected<protocol::StackTraceResponseBody> GetStackTraceRequest(
+      const protocol::StackTraceArguments &args);
+
+  // Also selects the frame's thread in LLDB, so console commands stay
+  // scoped to whatever frame the client is currently viewing.
+  protocol::ScopesResponseBody GetScopesRequest(const protocol::ScopesArguments &args);
+  protocol::VariablesResponseBody GetVariablesRequest(const protocol::VariablesArguments &args);
+  llvm::Expected<protocol::SetVariableResponseBody> SetVariableRequest(
+      const protocol::SetVariableArguments &args);
+  llvm::Expected<protocol::EvaluateResponseBody> GetEvaluateRequest(
+      const protocol::EvaluateArguments &args);
+  protocol::CompletionsResponseBody GetCompletionsRequest(const protocol::CompletionsArguments &args);
+  llvm::Expected<protocol::LocationsResponseBody> GetLocationsRequest(
+      const protocol::LocationsArguments &args);
 
 private:
   DebugContext &m_context;

@@ -29,6 +29,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/Threading.h"
 
 namespace core {
 
@@ -70,6 +71,37 @@ public:
   llvm::Error Disconnect();
   llvm::Error Disconnect(bool terminate_debuggee);
 
+  // Takes a LaunchRequest and launches the process (including running
+  // launchCommands if given), handling everything short of the additional
+  // request-level bookkeeping request_launch does around this call. Reused
+  // by RestartRequest too. Locks the API mutex internally for its full
+  // duration - see debug_context.hpp's class comment on the universal
+  // internal-locking rule.
+  llvm::Error LaunchProcess(const dap::protocol::LaunchRequestArguments &arguments);
+
+  // Attaches to an already-running debuggee (by pid, gdb-remote connection,
+  // core file, or attachCommands), handling everything short of the
+  // request-level PrintWelcomeMessage() the handler prints around this
+  // call. Locks the API mutex internally for its full duration.
+  llvm::Error Attach(const dap::protocol::AttachRequestArguments &arguments);
+
+  // Creates the target and launches it (see LaunchProcess above), handling
+  // everything short of the request-level PrintWelcomeMessage() the handler
+  // prints around this call. Locks the API mutex internally for its full
+  // duration (lldb::SBMutex is recursive, so calling the also-locking
+  // LaunchProcess from within is safe).
+  llvm::Error Launch(const dap::protocol::LaunchRequestArguments &arguments);
+
+  // Restarts a debug session: kills the current process (if any) and
+  // re-launches it with the last launch request's (possibly updated)
+  // arguments. Restarting an attach isn't supported (matches upstream).
+  // Locks the API mutex internally for its full duration.
+  llvm::Error Restart(const std::optional<dap::protocol::RestartArguments> &arguments);
+
+  // Runs RunTerminateCommands and sends the "terminated" event exactly once
+  // per session. Also called from Disconnect() above.
+  void SendTerminatedEvent();
+
   bool RunLLDBCommands(llvm::StringRef prefix, llvm::ArrayRef<std::string> commands);
   llvm::Error RunAttachCommands(llvm::ArrayRef<std::string> attach_commands);
   llvm::Error RunLaunchCommands(llvm::ArrayRef<std::string> launch_commands);
@@ -85,6 +117,7 @@ public:
 
 private:
   DebugContext &m_context;
+  llvm::once_flag m_terminated_event_flag;
 };
 
 }  // namespace core

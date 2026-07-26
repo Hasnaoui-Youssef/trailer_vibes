@@ -116,6 +116,91 @@ struct MemoryEventBody {
 };
 llvm::json::Value toJSON(const MemoryEventBody &);
 
+/// The event indicates that the target has produced some output.
+struct ProcessEventBody {
+  /// The logical name of the process. This is usually the full path to
+  /// process's executable file.
+  std::string name;
+
+  /// The system process id of the debugged process.
+  pid_t systemProcessId = LLDB_INVALID_PROCESS_ID;
+
+  /// If true, the process is running on the same computer as the debug
+  /// adapter.
+  bool isLocalProcess = false;
+
+  /// The size of a pointer or address for this process, in bits.
+  uint64_t pointerSize = 0;
+
+  /// Describes how the debug engine started debugging this process.
+  /// Values: 'launch', 'attach', 'attachForSuspendedLaunch'
+  std::string startMethod;
+};
+llvm::json::Value toJSON(const ProcessEventBody &);
+
+/// The event indicates that a thread has exited (the only `reason` this
+/// adapter ever sends for the `thread` event).
+struct ThreadExitedEventBody {
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
+};
+llvm::json::Value toJSON(const ThreadExitedEventBody &);
+
+/// The event indicates that the execution of the debuggee has stopped due to
+/// some condition (e.g. a breakpoint was hit, a step completed).
+struct StoppedEventBody {
+  /// The reason for the event.
+  /// Values: 'step', 'breakpoint', 'exception', 'pause', 'entry', 'goto',
+  /// 'function breakpoint', 'data breakpoint', 'instruction breakpoint', etc.
+  std::string reason;
+
+  /// Additional information, e.g. the address that was hit for an
+  /// instruction breakpoint, or the exception's label.
+  std::optional<std::string> description;
+
+  /// The thread which was stopped.
+  std::optional<tid_t> threadId;
+
+  /// Ids of the breakpoints that triggered the event, if any.
+  std::optional<std::vector<int64_t>> hitBreakpointIds;
+
+  /// Set only when true - used in tests to validate breaking behavior.
+  bool threadCausedFocus = false;
+
+  /// If true, the client should not automatically bring the focused thread's
+  /// UI into focus, but only take it into account when refreshing.
+  bool preserveFocusHint = false;
+
+  /// If true, all threads were stopped (as opposed to a single thread).
+  bool allThreadsStopped = true;
+};
+llvm::json::Value toJSON(const StoppedEventBody &);
+
+/// The event indicates that the execution of the debuggee has continued.
+struct ContinuedEventBody {
+  /// The thread which was continued.
+  tid_t threadId = LLDB_INVALID_THREAD_ID;
+
+  /// If true, all threads were continued (as opposed to a single thread).
+  bool allThreadsContinued = true;
+};
+llvm::json::Value toJSON(const ContinuedEventBody &);
+
+/// The event indicates that the debuggee has exited and returns its exit
+/// code.
+struct ExitedEventBody {
+  int64_t exitCode = 0;
+};
+llvm::json::Value toJSON(const ExitedEventBody &);
+
+/// The event indicates that some information about a breakpoint has
+/// changed. This adapter only ever reports the `changed` reason (locations
+/// added/removed/resolved on a breakpoint set through DAP don't remove the
+/// breakpoint itself).
+struct BreakpointEventBody {
+  Breakpoint breakpoint;
+};
+llvm::json::Value toJSON(const BreakpointEventBody &);
+
 } // end namespace dap::protocol
 
 #endif  // TRAILER_DAP_PROTOCOL_PROTOCOL_EVENTS_HPP_

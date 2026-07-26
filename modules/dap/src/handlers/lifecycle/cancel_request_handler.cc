@@ -46,9 +46,9 @@ namespace dap {
 /// A client cannot assume that progress just got cancelled after sending
 /// the `cancel` request.
 Error CancelRequestHandler::Run(const CancelArguments &arguments) const {
-  // Cancel support is built into the DebugService::Loop handler for detecting
+  // Cancel support is built into Orchestrator::HandleRequest for detecting
   // cancellations of pending or inflight requests.
-  dap.ClearCancelRequest(arguments);
+  orchestrator_.ClearCancelRequest(arguments);
   return Error::success();
 }
 

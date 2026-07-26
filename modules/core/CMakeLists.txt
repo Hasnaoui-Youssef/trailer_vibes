@@ -1,13 +1,12 @@
 # The domain layer (see CLAUDE.md's DebugContext/Components/Providers
 # architecture). Owns DebugContext and every domain component (breakpoints,
-# memory, disassembly, modules, data, execution, target as they're carved
-# out of debug_service - see PROJECT_STATUS.md for progress). Depends on
+# memory, disassembly, modules, data, execution, target). Depends on
 # providers (the only thing beneath a component) and dap_protocol (the
 # shared wire-format value-type vocabulary - see modules/dap/CMakeLists.txt
 # for why that specific dependency is not the "core depends on dap"
-# coupling the architecture forbids). Never depends on dap_core,
-# debug_service or dap_handlers - core must stay usable without any
-# particular communication layer on top of it.
+# coupling the architecture forbids). Never depends on dap_core or
+# dap_handlers - core must stay usable without any particular
+# communication layer on top of it.
 
 add_library(core
         src/debug_context.cc

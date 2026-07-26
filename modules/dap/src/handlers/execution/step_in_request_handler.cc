@@ -7,15 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "core/components/execution_controller.hpp"
-#include "debug_service/debug_service.hpp"
-#include "debug_service/lldb_utils.hpp"
 #include "dap/protocol/protocol_requests.hpp"
-#include "dap/protocol/protocol_types.hpp"
 #include "handlers/request_handler.hpp"
-
-using namespace llvm;
-using namespace lldb;
-using namespace dap::protocol;
 
 namespace dap {
 
@@ -31,34 +24,8 @@ namespace dap {
 // used to control into which target the `stepIn` should occur. The list of
 // possible targets for a given source line can be retrieved via the
 // `stepInTargets` request.
-Error StepInRequestHandler::Run(const StepInArguments &args) const {
-  SBThread thread = dap.Context().GetLLDBThread(args.threadId);
-  if (!thread.IsValid())
-    return make_error<DAPError>("invalid thread");
-
-  // Remember the thread ID that caused the resume so we can set the
-  // "threadCausedFocus" boolean value in the "stopped" events.
-  dap.Context().Execution().focus_tid = thread.GetThreadID();
-
-  if (!SBDebugger::StateIsStoppedState(dap.target.GetProcess().GetState()))
-    return make_error<NotStoppedError>();
-
-  lldb::SBError error;
-  if (args.granularity == eSteppingGranularityInstruction) {
-    thread.StepInstruction(/*step_over=*/false, error);
-    return ToError(error);
-  }
-
-  std::string step_in_target;
-  auto &step_in_targets = dap.Context().Execution().step_in_targets;
-  auto it = step_in_targets.find(args.targetId.value_or(0));
-  if (it != step_in_targets.end())
-    step_in_target = it->second;
-
-  RunMode run_mode = args.singleThread ? eOnlyThisThread : eOnlyDuringStepping;
-  thread.StepInto(step_in_target.c_str(), LLDB_INVALID_LINE_NUMBER, error,
-                  run_mode);
-  return ToError(error);
+llvm::Error StepInRequestHandler::Run(const protocol::StepInArguments &args) const {
+  return context_.Execution().StepIn(args);
 }
 
 } // namespace dap

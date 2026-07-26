@@ -2,17 +2,25 @@
 
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include "core/components/execution_controller.hpp"
 #include "core/debug_context.hpp"
 #include "core/lldb_utils.hpp"
+#include "dap/dap_error.hpp"
+#include "lldb/API/SBAttachInfo.h"
 #include "lldb/API/SBCommandInterpreter.h"
 #include "lldb/API/SBCommandReturnObject.h"
+#include "lldb/API/SBEnvironment.h"
 #include "lldb/API/SBFile.h"
+#include "lldb/API/SBLaunchInfo.h"
 #include "lldb/API/SBListener.h"
+#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBProcess.h"
+#include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -26,6 +34,47 @@ llvm::Error CreateRunLLDBCommandsErrorMessage(llvm::StringRef category) {
   return llvm::createStringError(
       llvm::inconvertibleErrorCode(),
       llvm::formatv("Failed to run {0} commands. See the Debug Console for more details.", category).str());
+}
+
+std::vector<const char *> MakeArgv(const llvm::ArrayRef<std::string> &strs) {
+  std::vector<const char *> argv;
+  for (const auto &s : strs)
+    argv.push_back(s.c_str());
+  argv.push_back(nullptr);
+  return argv;
+}
+
+uint32_t SetLaunchFlag(uint32_t flags, bool flag, lldb::LaunchFlags mask) {
+  if (flag)
+    flags |= mask;
+  else
+    flags &= ~mask;
+  return flags;
+}
+
+void SetupIORedirection(const std::vector<std::optional<std::string>> &stdio, lldb::SBLaunchInfo &launch_info) {
+  size_t n = std::max(stdio.size(), static_cast<size_t>(3));
+  for (size_t i = 0; i < n; i++) {
+    std::optional<std::string> path;
+    if (stdio.size() <= i)
+      path = stdio.back();
+    else
+      path = stdio[i];
+    if (!path)
+      continue;
+    switch (i) {
+    case 0:
+      launch_info.AddOpenFileAction(i, path->c_str(), true, false);
+      break;
+    case 1:
+    case 2:
+      launch_info.AddOpenFileAction(i, path->c_str(), false, true);
+      break;
+    default:
+      launch_info.AddOpenFileAction(i, path->c_str(), true, true);
+      break;
+    }
+  }
 }
 
 }  // namespace
@@ -167,6 +216,294 @@ void TargetManager::RunStopCommands() { RunLLDBCommands("Running stopCommands:",
 void TargetManager::RunExitCommands() { RunLLDBCommands("Running exitCommands:", configuration.exitCommands); }
 void TargetManager::RunTerminateCommands() {
   RunLLDBCommands("Running terminateCommands:", configuration.terminateCommands);
+}
+
+llvm::Error TargetManager::LaunchProcess(const dap::protocol::LaunchRequestArguments &arguments) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  const std::vector<std::string> &launchCommands = arguments.launchCommands;
+
+  lldb::SBLaunchInfo launch_info = m_context.Target().GetLaunchInfo();
+
+  if (!arguments.cwd.empty())
+    launch_info.SetWorkingDirectory(arguments.cwd.data());
+
+  if (!arguments.args.empty())
+    launch_info.SetArguments(MakeArgv(arguments.args).data(), true);
+
+  if (!arguments.env.empty()) {
+    lldb::SBEnvironment env;
+    for (const auto &kv : arguments.env)
+      env.Set(kv.first().data(), kv.second.c_str(), true);
+    launch_info.SetEnvironment(env, true);
+  }
+
+  if (!arguments.stdio.empty() && !arguments.disableSTDIO)
+    SetupIORedirection(arguments.stdio, launch_info);
+
+  launch_info.SetDetachOnError(arguments.detachOnError);
+  launch_info.SetShellExpandArguments(arguments.shellExpandArguments);
+
+  auto flags = launch_info.GetLaunchFlags();
+  flags = SetLaunchFlag(flags, arguments.disableASLR, lldb::eLaunchFlagDisableASLR);
+  flags = SetLaunchFlag(flags, arguments.disableSTDIO, lldb::eLaunchFlagDisableSTDIO);
+  launch_info.SetLaunchFlags(flags | lldb::eLaunchFlagDebug | lldb::eLaunchFlagStopAtEntry);
+
+  {
+    // Perform the launch in synchronous mode so that we don't have to worry
+    // about process state changes during the launch.
+    ScopeSyncMode scope_sync_mode(m_context.Lldb().debugger);
+
+    if (arguments.console != dap::protocol::eConsoleInternal) {
+      return llvm::createStringError(llvm::inconvertibleErrorCode(), "runInTerminal is not supported yet");
+    } else if (launchCommands.empty()) {
+      lldb::SBError error;
+      m_context.Target().Launch(launch_info, error);
+      if (error.Fail())
+        return ToError(error);
+    } else {
+      // Set the launch info so that run commands can access the configured
+      // launch details.
+      m_context.Target().SetLaunchInfo(launch_info);
+      if (llvm::Error err = RunLaunchCommands(launchCommands))
+        return err;
+
+      // The custom commands might have created a new target so we should use
+      // the selected target after these commands are run.
+      m_context.Target() = m_context.Lldb().debugger.GetSelectedTarget();
+    }
+  }
+
+  // Make sure the process is launched and stopped at the entry point before
+  // proceeding.
+  lldb::SBError error = m_context.Execution().WaitForProcessToStop(arguments.configuration.timeout);
+  if (error.Fail())
+    return ToError(error);
+
+  return llvm::Error::success();
+}
+
+llvm::Error TargetManager::Attach(const dap::protocol::AttachRequestArguments &arguments) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  // Session reuse (attaching to a debugger/target from a prior session) isn't
+  // ported yet - it depends on DAPSessionManager, which this project doesn't
+  // fork (see project-dap-layer-fork-strategy memory: no multi-session
+  // acceptor scenario in a stdio-per-process adapter). arguments.session is
+  // ignored for now.
+  std::optional<dap::protocol::DAPSession> session;
+
+  if (llvm::Error err = InitializeDebugger())
+    return err;
+
+  SetConfiguration(arguments.configuration, /*is_attach=*/true);
+  if (!arguments.coreFile.empty())
+    m_context.Execution().stop_at_entry = true;
+
+  // This is a hack for loading DWARF in .o files on Mac where the .o files
+  // in the debug map of the main executable have relative paths which
+  // require the lldb-dap binary to have its working directory set to that
+  // relative root for the .o files in order to be able to load debug info.
+  if (!configuration.debuggerRoot.empty())
+    llvm::sys::fs::set_current_path(configuration.debuggerRoot);
+
+  // Run any initialize LLDB commands the user specified in the launch.json
+  if (llvm::Error err = RunInitCommands())
+    return err;
+
+  ConfigureSourceMaps();
+
+  lldb::SBError error;
+  lldb::SBTarget target;
+  if (session) {
+    // Use the unique target ID to get the target.
+    target = m_context.Lldb().debugger.FindTargetByGloballyUniqueID(session->targetId);
+    if (!target.IsValid()) {
+      error.SetErrorString(llvm::formatv("invalid targetId {0} in attach config", session->targetId).str().c_str());
+    }
+  } else {
+    target = CreateTarget(error);
+  }
+
+  if (error.Fail())
+    return ToError(error);
+
+  SetTarget(target);
+
+  // Run any pre run LLDB commands the user specified in the launch.json
+  if (llvm::Error err = RunPreRunCommands())
+    return err;
+
+  if ((arguments.pid == LLDB_INVALID_PROCESS_ID || arguments.gdbRemotePort == LLDB_DAP_INVALID_PORT) &&
+      arguments.waitFor)
+    m_context.SendOutput(OutputCategory::Console,
+                         llvm::formatv("Waiting to attach to \"{0}\"...",
+                                       m_context.Target().GetExecutable().GetFilename())
+                             .str());
+
+  {
+    // Perform the launch in synchronous mode so that we don't have to worry
+    // about process state changes during the launch.
+    ScopeSyncMode scope_sync_mode(m_context.Lldb().debugger);
+
+    if (!arguments.attachCommands.empty()) {
+      // Run the attach commands, after which we expect the debugger's selected
+      // target to contain a valid and stopped process. Otherwise inform the
+      // user that their command failed or the debugger is in an unexpected
+      // state.
+      if (llvm::Error err = RunAttachCommands(arguments.attachCommands))
+        return err;
+
+      m_context.Target() = m_context.Lldb().debugger.GetSelectedTarget();
+
+      // Validate the attachCommand results.
+      if (!m_context.Target().GetProcess().IsValid())
+        return llvm::make_error<dap::DAPError>("attachCommands failed to attach to a process");
+    } else if (!arguments.coreFile.empty()) {
+      m_context.Target().LoadCore(arguments.coreFile.data(), error);
+    } else if (arguments.gdbRemotePort != LLDB_DAP_INVALID_PORT) {
+      lldb::SBListener listener = m_context.Lldb().debugger.GetListener();
+
+      // If the user hasn't provided the hostname property, default
+      // localhost being used.
+      std::string connect_url = llvm::formatv("connect://{0}:", arguments.gdbRemoteHostname);
+      connect_url += std::to_string(arguments.gdbRemotePort);
+      m_context.Target().ConnectRemote(listener, connect_url.c_str(), "gdb-remote", error);
+    } else if (!session) {
+      // Attach by pid or process name.
+      lldb::SBAttachInfo attach_info;
+      if (arguments.pid != LLDB_INVALID_PROCESS_ID)
+        attach_info.SetProcessID(arguments.pid);
+      else if (!configuration.program.empty())
+        attach_info.SetExecutable(configuration.program.data());
+      attach_info.SetWaitForLaunch(arguments.waitFor, /*async=*/false);
+      m_context.Target().Attach(attach_info, error);
+    }
+
+    if (error.Fail())
+      return ToError(error);
+  }
+
+  // Make sure the process is attached and stopped.
+  error = m_context.Execution().WaitForProcessToStop(arguments.configuration.timeout);
+  if (error.Fail())
+    return ToError(error);
+
+  if (arguments.coreFile.empty() && !m_context.Target().GetProcess().IsValid())
+    return llvm::make_error<dap::DAPError>("failed to attach to process");
+
+  RunPostRunCommands();
+
+  return llvm::Error::success();
+}
+
+llvm::Error TargetManager::Launch(const dap::protocol::LaunchRequestArguments &arguments) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  if (llvm::Error err = InitializeDebugger())
+    return err;
+
+  SetConfiguration(arguments.configuration, /*is_attach=*/false);
+  last_launch_request = arguments;
+
+  // This is a hack for loading DWARF in .o files on Mac where the .o files
+  // in the debug map of the main executable have relative paths which
+  // require the lldb-dap binary to have its working directory set to that
+  // relative root for the .o files in order to be able to load debug info.
+  if (!configuration.debuggerRoot.empty())
+    llvm::sys::fs::set_current_path(configuration.debuggerRoot);
+
+  // Run any initialize LLDB commands the user specified in the launch.json.
+  // This is run before target is created, so commands can't do anything with
+  // the targets - preRunCommands are run with the target.
+  if (llvm::Error err = RunInitCommands())
+    return err;
+
+  ConfigureSourceMaps();
+
+  lldb::SBError error;
+  lldb::SBTarget target = CreateTarget(error);
+  if (error.Fail())
+    return ToError(error);
+
+  SetTarget(target);
+
+  // Run any pre run LLDB commands the user specified in the launch.json
+  if (llvm::Error err = RunPreRunCommands())
+    return err;
+
+  if (llvm::Error err = LaunchProcess(arguments))
+    return err;
+
+  RunPostRunCommands();
+
+  return llvm::Error::success();
+}
+
+llvm::Error TargetManager::Restart(const std::optional<dap::protocol::RestartArguments> &arguments) {
+  lldb::SBMutex lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> guard(lock);
+
+  if (!m_context.Target().GetProcess().IsValid())
+    return llvm::make_error<dap::DAPError>("Restart request received but no process was launched.");
+
+  if (arguments) {
+    if (std::holds_alternative<dap::protocol::AttachRequestArguments>(arguments->arguments))
+      return llvm::make_error<dap::DAPError>("Restarting an AttachRequest is not supported.");
+    if (const auto *launch_arguments =
+            std::get_if<dap::protocol::LaunchRequestArguments>(&arguments->arguments)) {
+      last_launch_request = *launch_arguments;
+      // Update the configuration based on the latest copy of the launch
+      // arguments.
+      SetConfiguration(launch_arguments->configuration, /*is_attach=*/false);
+      ConfigureSourceMaps();
+    }
+  }
+
+  // Keep track of the old PID so when we get a "process exited" event from the
+  // killed process we can detect it and not shut down the whole session.
+  lldb::SBProcess process = m_context.Target().GetProcess();
+  restarting_process_id = process.GetProcessID();
+
+  // Stop the current process if necessary. The logic here is similar to
+  // CommandObjectProcessLaunchOrAttach::StopProcessIfNecessary, except that
+  // we don't ask the user for confirmation.
+  if (process.IsValid()) {
+    ScopeSyncMode scope_sync_mode(m_context.Lldb().debugger);
+    lldb::StateType state = process.GetState();
+    if (state != lldb::eStateConnected) {
+      if (lldb::SBError error = process.Kill(); error.Fail())
+        return ToError(error);
+    }
+    // Clear the list of thread ids to avoid sending "thread exited" events
+    // for threads of the process we are terminating.
+    m_context.Execution().thread_ids.clear();
+  }
+
+  // FIXME: Should we run 'preRunCommands'?
+  // FIXME: Should we add a 'preRestartCommands'?
+  if (llvm::Error error = LaunchProcess(*last_launch_request))
+    return error;
+
+  m_context.Execution().SendProcessEvent(core::Launch);
+
+  // This is normally done after receiving a "configuration done" request.
+  // Because we're restarting, configuration has already happened so we can
+  // continue the process right away.
+  if (m_context.Execution().stop_at_entry)
+    return m_context.Execution().SendThreadStoppedEvent(/*on_entry=*/true);
+
+  return ToError(m_context.Target().GetProcess().Continue());
+}
+
+void TargetManager::SendTerminatedEvent() {
+  llvm::call_once(m_terminated_event_flag, [&] {
+    RunTerminateCommands();
+    m_context.Emit(TerminatedEvent{BuildTerminatedStatisticsJSON(m_context.Target())});
+  });
 }
 
 llvm::Error TargetManager::InitializeDebugger() {

@@ -6,17 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "debug_service/debug_service.hpp"
-#include "handlers/request_handler.hpp"
-#include "debug_service/lldb_utils.hpp"
+#include "core/components/execution_controller.hpp"
 #include "dap/protocol/protocol_requests.hpp"
-#include "lldb/API/SBError.h"
-#include "lldb/API/SBProcess.h"
-#include "llvm/Support/Error.h"
-
-using namespace llvm;
-using namespace lldb;
-using namespace dap::protocol;
+#include "handlers/request_handler.hpp"
 
 namespace dap {
 
@@ -26,25 +18,9 @@ namespace dap {
 /// argument to true resumes only the specified thread. If not all threads were
 /// resumed, the `allThreadsContinued` attribute of the response should be set
 /// to false.
-Expected<ContinueResponseBody>
-ContinueRequestHandler::Run(const ContinueArguments &args) const {
-  SBProcess process = dap.target.GetProcess();
-  SBError error;
-
-  if (!SBDebugger::StateIsStoppedState(process.GetState()))
-    return make_error<NotStoppedError>();
-
-  if (args.singleThread)
-    dap.Context().GetLLDBThread(args.threadId).Resume(error);
-  else
-    error = process.Continue();
-
-  if (error.Fail())
-    return ToError(error);
-
-  ContinueResponseBody body;
-  body.allThreadsContinued = !args.singleThread;
-  return body;
+llvm::Expected<protocol::ContinueResponseBody>
+ContinueRequestHandler::Run(const protocol::ContinueArguments &args) const {
+  return context_.Execution().Continue(args);
 }
 
 } // namespace dap

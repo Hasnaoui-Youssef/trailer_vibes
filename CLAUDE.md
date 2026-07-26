@@ -1,439 +1,375 @@
-# Claude.md
+# CLAUDE.md
 
-# Trace Analysis Engine - Trailer
+# Embedded Debugger Extension
 
-## Project Overview
+## Project Vision
 
-This project implements a high-performance instruction trace analysis engine for Arm CoreSight trace data.
+This project aims to build a modern, full-featured embedded systems debugging tool.
 
-The engine reconstructs program execution from Embedded Trace Macrocell (ETMv3/ETMv4) instruction trace and exposes the decoded information through machine-readable interfaces for consumption by external debugger frontends.
+The objective is **not** to build another thin wrapper around an existing debugger, but rather to develop a reusable debugging engine capable of powering multiple frontends.
 
-This project is **not** intended to be a standalone application or interactive debugger.
+Long-term, the engine should be portable to other IDEs, desktop applications, command line tools, or custom frontends with minimal effort.
 
-Its sole responsibility is deterministic processing of trace data.
+---
 
-External applications are responsible for:
+# Functionality
 
-- Trace acquisition
-- Debug probe communication
+The engine must provide the following functionalities as first class citizens.
+
+This includes, but is not limited to:
+
+- Debug session management
+- Symbol handling
+- Register management
+- Breakpoints
+- Memory access
+- Variable inspection
+- Expression evaluation
+- Stack unwinding
+- Peripheral modeling
+- SVD parsing
+- Instruction trace decoding
+- Profiling
+- Coverage analysis
+
+---
+
+## UI Agnostic
+
+The engine must never depend on Visual Studio Code APIs.
+
+It exposes a communication interface that any frontend can consume.
+
+Possible future frontends include:
+
+- Qt desktop application
+- JetBrains plugin
+- Standalone GUI
+- Command line interface
+- Web frontend
+
+---
+
+## Modular
+
+Each subsystem should have a clearly defined responsibility.
+
+Examples include:
+
+- DAP layer
+- Debug session manager
+- Symbol manager
+- Memory subsystem
+- Register subsystem
+- Breakpoint subsystem
+- Trace subsystem
+- SVD subsystem
+- Profiling subsystem
+
+Modules communicate through well-defined interfaces.
+
+---
+
+# High-Level Architecture
+
+```
+
+          Debug Adapter Protocol
+                     │
+
+──────────────── Communication ────────────────
+
+                     │
+
+                     │
+
+                Transport
+
+                     │
+
+                Orchestrator
+
+                     │
+
+                 Handlers
+ ┌─────────────────────────────────────────────┐
+ │                                             │
+ │ Debug Session Manager                       │
+ │ Breakpoints                                 │
+ │ Register                                    │
+ │ Variable                                    │
+ │ Memory                                      │
+ │ Symbol                                      │
+ │ Stack                                       │
+ │ Peripheral                                  │
+ │ SVD Parser                                  │
+ │ Instruction Trace                           │
+ │ Profiling                                   │
+ │ Coverage                                    │
+ │ Runtime Analysis                            │
+ │                                             │
+ └─────────────────────────────────────────────┘
+
+            │                     │
+
+            │                     │
+
+      Orcestrator          Debug Context ──────────────────── Component Managers
+
+            │                     │
+
+            │                     │
+
+            │                   Providers (Resource Ownership e.g. OpenOCD server/LLDB Debugger)
+        DAP Client        ┌─────────────────────────┐
+                          │  LLDB SB API            │
+                          │  OpenOCD TCL Interface  │
+                          │  Trace Engine           │
+                          │  Disassembly            │
+                          └─────────────────────────┘
+
+                                     │
+
+                                OpenOCD Server
+
+                                     │
+
+                                Target Device
+```
+
+---
+
+# Debugging Backend
+
+LLDB is responsible for:
+
+- Executing the Debug Adapter operations
+- Symbol loading
+- Register access
+- Memory access
+- Variable inspection
+- Expression evaluation
+- Thread management
+- Stack unwinding
+- Breakpoint management
+
+LLDB communicates with OpenOCD using the standard GDB Remote Serial Protocol (RSP).
+
+The engine never communicates with RSP directly.
+
+---
+
+# OpenOCD Integration
+
+OpenOCD serves two distinct purposes.
+
+## Standard Debugging
+
+LLDB communicates with OpenOCD using the GDB Remote Serial Protocol.
+
+Execution control, stepping, memory access, registers, and breakpoints all flow through LLDB.
+
+---
+
+## Extended Features
+
+Many embedded debugging capabilities are outside the scope of GDB Remote.
+
+Examples include:
+
 - ETM configuration
-- Process lifecycle
-- User interface
-- Session management
+- TMC configuration
+- CoreSight component discovery
+- Trace buffer extraction
+- Vendor-specific monitor commands
+- Hardware diagnostics
 
-This project only consumes the collected data and produces structured analysis.
+For these capabilities, the engine communicates directly with OpenOCD through its TCL interface.
 
----
-
-# Design Philosophy
-
-The project favors:
-
-- deterministic behavior
-- simple control flow
-- explicit ownership
-- low runtime overhead
-- composable modules
-- minimal abstractions
-
-Prefer code that is obvious over code that is clever.
-
-Avoid unnecessary abstraction layers.
-
-Avoid introducing frameworks.
-
-If a problem can be solved with ordinary functions and value types, do not introduce inheritance.
+This allows the engine to access functionality that is not represented in LLDB without using the monitor command.
 
 ---
 
-# Scope
+# Debug Adapter Layer
 
-The engine is responsible for:
+The engine implements its own Debug Adapter Protocol layer.
 
-- loading firmware images
-- loading trace data
-- configuring OpenCSD decoders
-- reconstructing executed instructions
-- correlating instructions with DWARF information
-- generating higher level execution information
-- exposing results to external processes
+The implementation should follow the DAP specification while remaining independent of any specific IDE.
 
-The engine is **not** responsible for:
+The implementation is heavily inspired by LLVM's **lldb-dap** project, which serves as the primary architectural reference.
+Custom DAP requests may be introduced to expose embedded-specific functionality not covered by the standard protocol.
 
-- flashing targets
-- configuring OpenOCD
-- interacting with GDB
-- communicating with debug probes
-- implementing IDE functionality
-- graphical interfaces
+Examples include:
+
+- Peripheral access
+- Trace decoding
+- Coverage information
+- Runtime profiling
+- ETM configuration
+- CoreSight topology
 
 ---
 
-# Primary Libraries
+# Planned Features
 
-The project intentionally relies on existing libraries instead of reimplementing functionality.
+The engine will expose dedicated features for embedded debugging.
+
+## Registers
+
+- Core registers
+- Floating-point registers
+- Special registers
+- Optional architecture-specific register banks
+
+Support:
+
+- Editing
+- Search
+- Grouping
+- Filtering
+
+---
+
+## Disassembly
+
+Features include:
+
+- Mixed source/assembly
+- Instruction bytes
+- Breakpoint markers
+- Symbol annotations
+
+The disassembly implementation is independent from LLDB (use LLVM).
+
+---
+
+## Breakpoint Manager
+
+Support:
+
+- Software breakpoints
+- Hardware breakpoints
+- Conditional breakpoints
+- Function breakpoints
+- Instruction breakpoints
+- Tracepoints
+
+---
+
+## Memory View
+
+Support:
+
+- Arbitrary addresses
+- Multiple data widths
+- ASCII view
+- Hex view
+- Signed/unsigned display
+- Floating-point display
+
+Future additions may include memory region awareness.
+
+---
+
+## Peripheral View
+
+Peripheral descriptions are generated directly from CMSIS-SVD files.
+
+Support:
+
+- Peripheral hierarchy
+- Register fields
+- Enumerations
+- Bitfield editing
+
+We own all SVD parsing.
+
+---
+
+## Variables
+
+Support:
+
+- Local variables
+- Globals
+- Statics
+- Watches
+- Expression evaluation
+- STL container visualization
+- Pretty printers
+
+---
+
+## Instruction Trace
+
+Trace support includes:
+
+- Trace component configuration (TMC, ETMv4, funnels, etc...)
+- Timestamp reconstruction
+- Exception visualization
+- Timeline navigation
+- Instruction history
+
+The trace engine is independent from LLDB.
+
+---
+
+## Stack View
+
+Support:
+
+- Stack frames
+- Inlined functions
+- Exception frames
+- Tail-call handling
+- Frame navigation
+
+---
+
+## Profiling
+
+Long-term profiling goals include:
+
+- Flame graphs
+- Runtime call graph
+- Execution timelines
+- Code coverage
+- Hot path visualization
+- Function statistics
+
+---
+
+# External References
+
+The following projects are considered primary references during development.
 
 ## LLVM
 
-LLVM is used for:
-
-- object file loading
-- ELF parsing
-- DWARF parsing
-- instruction disassembly
-- symbol lookup
-- source correlation
-
-Do not replace LLVM functionality with custom implementations unless there is a measurable benefit.
-
----
+- LLDB
+- LLDB SB API
+- lldb-dap
 
 ## OpenCSD
 
-OpenCSD is the authoritative decoder for CoreSight trace protocols.
+- Trace Decoding
 
-Its responsibility ends at generating generic trace elements.
+## Perf
+- Runtime Analysis
 
-This project builds higher-level analysis on top of those decoded elements.
-
-Do not duplicate protocol decoding logic that already exists in OpenCSD.
-
----
-
-# Supported Inputs
-
-The engine should eventually support multiple input formats.
-
-Possible formats include:
-
-## Structured Configuration
-
-External processes may provide:
-
-- firmware image path
-- trace data path
-- ETM register values
-- decoder configuration
-
-The configuration may be represented as:
-
-- JSON
-- line-oriented streaming protocol
-- another serialization format
-
-The decoding pipeline should remain independent of the transport mechanism.
+These define the debugging backend and DAP architecture.
 
 ---
 
-## Arm Debug and Trace Snapshot
+# Engineering Guidelines
 
-OpenCSD already provides infrastructure for creating decoders from snapshot files.
-
-Whenever possible, reuse existing OpenCSD snapshot support.
-
----
-
-# Architecture
-
-The project is organized as a processing pipeline.
-
-```
-Input
-    │
-    ▼
-Configuration Loading
-    │
-    ▼
-Trace Source
-    │
-    ▼
-OpenCSD Decoder
-    │
-    ▼
-Generic Trace Elements
-    │
-    ▼
-Instruction Reconstruction
-    │
-    ▼
-Execution Analysis
-    │
-    ▼
-Profiling / Timing / Statistics
-    │
-    ▼
-Serializable Results
-```
-
-Each stage should expose a well-defined interface.
-
-Avoid coupling unrelated stages.
-
----
-
-# Communication
-
-This project should be embeddable inside larger debugging systems.
-
-Communication interfaces may include:
-
-- TCP
-- stdin/stdout
-- shared libraries
-- future IPC mechanisms
-
-Transport code should remain separate from trace analysis.
-
-The analysis engine should not depend on a specific communication backend.
-
----
-
-# Logging
-
-stdout is reserved for machine-readable output.
-
-All logging, diagnostics, warnings, and debugging messages must be written to stderr.
-
-Never mix diagnostic output with serialized analysis data.
-
----
-
-# Data Ownership
-
-Favor value semantics.
-
-Avoid global state.
-
-Avoid hidden ownership.
-
-Prefer:
-
-- std::unique_ptr
-- std::optional
-- std::variant
-- std::span
-- std::string_view
-
-Avoid shared ownership unless ownership is genuinely shared.
-
----
-
-# Error Handling
-
-Recoverable errors should be propagated explicitly.
-
-Fatal programming errors should use assertions.
-
-Do not silently ignore malformed trace data.
-
-Error messages should provide enough context for external tools.
-
----
-
-# Performance
-
-Instruction traces may contain millions of packets.
-
-Code should avoid:
-
-- unnecessary heap allocations
-- repeated string copies
-- unnecessary virtual dispatch
-- hidden O(N²) algorithms
-
-Prefer streaming algorithms whenever possible.
-
-Avoid premature optimization.
-
-Measure before optimizing.
-
----
-
-# C++ Guidelines
-
-Language standard:
-
-- C++20
-
-Compiler:
-
-- Clang
-
-Build system:
-
-- CMake, always configured with the Ninja generator (`cmake -S . -B build -G Ninja`) and Clang (`CC=clang CMAKE_C_COMPILER=clang`, `CXX=clang++ CMAKE_CXX_COMPILER=clang++`). Never configure or build this project with another generator (e.g. Unix Makefiles) or another compiler (e.g. GCC).
-
-Dependencies should be added through FetchContent whenever practical.
-
-Follow the Google C++ Style Guide.
-
----
-
-## File Naming
-
-Headers:
-
-```
-foo_bar.hpp
-```
-
-Sources:
-
-```
-foo_bar.cc
-```
-
-Tests:
-
-```
-foo_bar_test.cc
-```
-
----
-
-## Naming
-
-Types:
-
-```
-TraceAnalyzer
-```
-
-Functions:
-
-```
-DecodeTrace()
-```
-
-Variables:
-
-```
-instruction_count
-```
-
-Constants:
-
-```
-kMaximumPacketSize
-```
-
-Namespaces:
-
-```
-trace
-```
-
----
-
-# Object-Oriented Programming
-
-Use classes where they model ownership or encapsulate state.
-
-Avoid inheritance unless there is a compelling architectural reason.
-
-Avoid deep inheritance hierarchies.
-
-Avoid runtime polymorphism unless required.
-
-Prefer:
-
-- composition
-- free functions
-- templates
-- value types
-
-Virtual functions should be rare.
-
----
-
-# Memory Management
-
-RAII is mandatory.
-
-Never expose raw owning pointers.
-
-Raw pointers should represent non-owning references only.
-
-Prefer stack allocation whenever practical.
-
----
-
-# Serialization
-
-Analysis results should remain serializable.
-
-Internal data structures should avoid transport-specific concerns.
-
-Serialization formats should be implemented as adapters around the core data model.
-
----
-
-# Testing
-
-Every decoder stage should have reproducible test vectors.
-
-Favor deterministic tests over randomized tests.
-
-Tests should not require physical hardware.
-
----
-
-# Future Work
-
-Future functionality may include:
-
-- function profiling
-- execution timeline reconstruction
-- exception visualization
-- branch statistics
-- cache analysis
-- execution heat maps
-- trace compression
-- additional CoreSight component support
-
-The architecture should remain flexible enough to support these additions without requiring major redesign.
-
----
-
-# General Principles
-
-When contributing code:
-
-- Keep modules small.
+- Favor correctness over premature optimization.
 - Prefer composition over inheritance.
-- Minimize dependencies.
-- Avoid global state.
-- Avoid hidden side effects.
-- Make ownership explicit.
-- Keep interfaces narrow.
-- Write deterministic code.
-- Prefer readability over cleverness.
-- Reuse LLVM and OpenCSD whenever possible.
+- Minimize global state.
+- Every subsystem should have a single responsibility.
+- Separate DAP logic from debugging logic.
+- Avoid exposing LLDB implementation details outside the LLDB provider.
+- Keep communication interfaces stable.
+- Design for future extensibility.
+- Prefer explicit interfaces over implicit coupling.
+- Every new subsystem should have a clear ownership model.
 
-# Architectural Rules
-
-These rules should not be violated without explicit justification.
-
-1. OpenCSD is the only component responsible for protocol decoding.
-
-2. LLVM is the only component responsible for object file parsing and
-   disassembly.
-
-3. Transport code must never depend on analysis code internals.
-
-4. Analysis code must never depend on transport implementations.
-
-5. Every stage of the pipeline should accept typed inputs and produce typed
-   outputs.
-
-6. Public interfaces should remain stable even if internal implementations
-   change.
-
-7. Prefer adding a new pipeline stage over modifying unrelated stages.
-
-8. New features should be implemented by extending the pipeline, not by adding
-   special cases throughout the codebase.
-
-9. No component should own more than one responsibility.
-
-10. The engine should remain usable as a library without modification.

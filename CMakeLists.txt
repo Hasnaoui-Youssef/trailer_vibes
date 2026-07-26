@@ -95,7 +95,6 @@ add_executable(trailer-dap
 target_link_libraries(trailer-dap
     PRIVATE
     dap_core
-    debug_service
     dap_handlers
 )
 
