@@ -39,8 +39,6 @@ lldb::SBAddress GetDisassembleStartAddress(lldb::SBTarget target, lldb::SBAddres
     return addr;
 
   if (target.GetMinimumOpcodeByteSize() == target.GetMaximumOpcodeByteSize()) {
-    // We have fixed opcode size, so we can calculate the address directly,
-    // negative or positive.
     lldb::addr_t load_addr = addr.GetLoadAddress(target);
     load_addr += instruction_offset * target.GetMinimumOpcodeByteSize();
     return lldb::SBAddress(load_addr, target);
@@ -51,22 +49,16 @@ lldb::SBAddress GetDisassembleStartAddress(lldb::SBTarget target, lldb::SBAddres
     return forward_insts.GetInstructionAtIndex(forward_insts.GetSize() - 1).GetAddress();
   }
 
-  // We have a negative instruction offset, so we need to disassemble backwards.
-  // The opcode size is not fixed, so we have no idea where to start from.
-  // Let's try from the start of the current symbol if available.
   auto symbol = addr.GetSymbol();
   if (!symbol.IsValid())
     return addr;
 
-  // Add valid instructions before the current instruction using the symbol.
   lldb::SBInstructionList symbol_insts = target.ReadInstructions(symbol.GetStartAddress(), addr, nullptr);
   if (!symbol_insts.IsValid() || symbol_insts.GetSize() == 0)
     return addr;
 
   const auto backwards_instructions_count = static_cast<size_t>(std::abs(instruction_offset));
   if (symbol_insts.GetSize() < backwards_instructions_count) {
-    // We don't have enough instructions to disassemble backwards, so just
-    // return the start address of the symbol.
     return symbol_insts.GetInstructionAtIndex(0).GetAddress();
   }
 

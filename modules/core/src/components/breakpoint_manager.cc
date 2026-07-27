@@ -50,8 +50,6 @@ void BreakpointManager::PopulateExceptionBreakpoints() {
                                         lldb::eLanguageTypeC_plus_plus, eExceptionKindThrow);
   }
 
-  // Besides the hardcoded C++ case above, try to find any other languages
-  // that support exception breakpoints using the SB API.
   for (int raw_lang = lldb::eLanguageTypeUnknown; raw_lang < lldb::eNumLanguageTypes; ++raw_lang) {
     lldb::LanguageType lang = static_cast<lldb::LanguageType>(raw_lang);
 
@@ -173,13 +171,9 @@ std::vector<protocol::Breakpoint> BreakpointManager::SetSourceBreakpoints(
     }
   }
 
-  // Delete any breakpoints in this source file that aren't in the
-  // request_bps set. There is no call to remove breakpoints other than
-  // calling this function with a smaller or empty "breakpoints" list.
   for (auto it = existing_breakpoints.begin(); it != existing_breakpoints.end();) {
     auto request_pos = request_breakpoints.find(it->first);
     if (request_pos == request_breakpoints.end()) {
-      // This breakpoint no longer exists in this source file, delete it
       m_context.Target().BreakpointDelete(it->second.GetID());
       it = existing_breakpoints.erase(it);
     } else {
@@ -221,11 +215,6 @@ std::vector<std::pair<uint32_t, uint32_t>> GetSourceBreakpointLocations(
       if (line == end_line && column > end_column)
         continue;
 
-      // Make sure we are in the right file.
-      // We might have a match on line & column range and still
-      // be in the wrong file, e.g. for included files.
-      // Given that the involved pointers point into LLDB's string pool,
-      // we can directly compare the `const char*` pointers.
       if (line_entry.GetFileSpec().GetFilename() != primary_file_spec.GetFilename() ||
           line_entry.GetFileSpec().GetDirectory() != primary_file_spec.GetDirectory())
         continue;
@@ -272,7 +261,6 @@ protocol::BreakpointLocationsResponseBody BreakpointManager::GetBreakpointLocati
   uint32_t end_line = args.endLine.value_or(start_line);
   uint32_t end_column = args.endColumn.value_or(std::numeric_limits<uint32_t>::max());
 
-  // Find all relevant lines & columns.
   std::vector<std::pair<uint32_t, uint32_t>> locations;
   if (args.source.sourceReference) {
     locations = GetAssemblyBreakpointLocations(m_context.Target(), *args.source.sourceReference, start_line, end_line);

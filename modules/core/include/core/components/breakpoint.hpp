@@ -1,9 +1,3 @@
-//===-- breakpoint.hpp -----------------------------------------------------===//
-//
-// Relocated from debug_service/breakpoint.hpp - see breakpoint_base.hpp.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_BREAKPOINT_HPP_
 #define TRAILER_CORE_COMPONENTS_BREAKPOINT_HPP_
 

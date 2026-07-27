@@ -54,7 +54,6 @@ protocol::StackFrame CreateStackFrame(DebugContext &context, lldb::SBFrame &fram
   if (stack_frame.name.empty())
     stack_frame.name = GetLoadAddressString(frame.GetPC());
 
-  // Only append "[opt]" when a custom frame format isn't specified.
   if (!format && frame.GetFunction().GetIsOptimized())
     stack_frame.name += " [opt]";
 
@@ -64,7 +63,6 @@ protocol::StackFrame CreateStackFrame(DebugContext &context, lldb::SBFrame &fram
     stack_frame.line = line_entry.GetLine();
     stack_frame.column = line_entry.GetColumn();
   } else if (frame.GetSymbol().IsValid()) {
-    // Disassembly fallback: derive the line from the symbol's start address.
     lldb::SBInstructionList inst_list =
         context.Target().ReadInstructions(frame.GetSymbol().GetStartAddress(), frame.GetPCAddress(), nullptr);
     stack_frame.line = inst_list.GetSize() + 1;
@@ -108,10 +106,6 @@ protocol::StackFrame CreateExtendedStackFrameLabel(lldb::SBThread &thread, lldb:
   return stack_frame;
 }
 
-// Threads may have runtime-specific extended backtraces attached (e.g.
-// libdispatch queues) - report the thread's own frames first, then a
-// breadth-first walk of any extended backtrace frames, each preceded by a
-// synthetic label frame.
 bool FillStackFrames(DebugContext &context, lldb::SBThread &thread, lldb::SBFormat &frame_format,
                      std::vector<protocol::StackFrame> &stack_frames, int64_t &offset, const int64_t start_frame,
                      const int64_t levels, const bool include_all) {
@@ -159,8 +153,6 @@ protocol::Scope CreateScope(ScopeKind kind, int64_t variablesReference, int64_t 
   scope.expensive = expensive;
 
   // TODO: Support "arguments" and "return value" scope.
-  // At the moment lldb-dap includes the arguments and return_value into the
-  // "locals" scope.
   // VS Code only expands the first non-expensive scope. This causes friction
   // if we add the arguments above the local scope, as the locals scope will not
   // be expanded if we enter a function with arguments. It becomes more
@@ -247,11 +239,8 @@ lldb::SBValue Variables::FindVariable(uint64_t variablesReference, llvm::StringR
   lldb::SBValue variable;
   if (std::optional<ScopeData> scope_data = GetTopLevelScope(variablesReference)) {
     bool is_duplicated_variable_name = name.contains(" @");
-    // variablesReference is one of our scopes, not an actual variable it is
-    // asking for a variable in locals or globals or registers
+    // variablesReference is one of our scopes, not an actual variable.
     int64_t end_idx = scope_data->scope.GetSize();
-    // Searching backward so that we choose the variable in closest scope
-    // among variables of the same name.
     for (int64_t i = end_idx - 1; i >= 0; --i) {
       lldb::SBValue curr_variable = scope_data->scope.GetValueAtIndex(i);
       std::string variable_name = CreateUniqueVariableNameForDisplay(curr_variable, is_duplicated_variable_name);
@@ -261,11 +250,6 @@ lldb::SBValue Variables::FindVariable(uint64_t variablesReference, llvm::StringR
       }
     }
   } else {
-    // This is not under the globals or locals scope, so there are no
-    // duplicated names.
-
-    // We have a named item within an actual variable so we need to find it
-    // withing the container variable by name.
     lldb::SBValue container = GetVariable(variablesReference);
     variable = container.GetChildMemberWithName(name.data());
     if (!variable.IsValid()) {
@@ -460,15 +444,10 @@ protocol::VariablesResponseBody DataManager::GetVariablesRequest(const protocol:
 
   std::optional<ScopeData> scope_data = variables.GetTopLevelScope(var_ref);
   if (scope_data) {
-    // variablesReference is one of our scopes (args, locals, globals), not
-    // an actual variable.
     int64_t start_idx = 0;
     int64_t num_children = 0;
 
     if (scope_data->kind == eScopeKindRegisters) {
-      // Show pointer-sized registers in the first register set as
-      // eFormatAddressInfo (pointer + what it resolves to), unless a
-      // non-default format was already set for that register.
       const uint32_t addr_size = m_context.Target().GetProcess().GetAddressByteSize();
       lldb::SBValue reg_set = scope_data->scope.GetValueAtIndex(0);
       const uint32_t num_regs = reg_set.GetNumChildren();
@@ -484,8 +463,6 @@ protocol::VariablesResponseBody DataManager::GetVariablesRequest(const protocol:
 
     num_children = scope_data->scope.GetSize();
     if (num_children == 0 && scope_data->kind == eScopeKindLocals) {
-      // Surface an SBValueList error (e.g. missing debug info) as a fake
-      // "<error>" variable instead of an empty locals list.
       lldb::SBError error = scope_data->scope.GetError();
       if (const char *var_err = error.GetCString()) {
         protocol::Variable var;
@@ -549,8 +526,6 @@ protocol::VariablesResponseBody DataManager::GetVariablesRequest(const protocol:
       for (; i < end_idx && i < num_children; ++i)
         add_child(variable.GetChildAtIndex(i));
 
-      // If the count quota isn't filled, add a "[raw]" child so the user
-      // can inspect a synthetic member's raw value without the debug console.
       if (synthetic_child_debugging && variable.IsSynthetic() && i == num_children)
         add_child(variable.GetNonSyntheticValue(), "[raw]");
     }
@@ -588,8 +563,6 @@ DataManager::SetVariableRequest(const protocol::SetVariableArguments &args) {
   body.value = desc.display_value;
   body.type = desc.display_type_name;
 
-  // The index of this variable in our Variables registry is unknown, so
-  // always insert a new one to get its variablesReference.
   const int64_t new_var_ref = variables.InsertVariable(variable, /*is_permanent=*/false);
   if (variable.MightHaveChildren()) {
     body.variablesReference = new_var_ref;
@@ -641,12 +614,8 @@ DataManager::GetEvaluateRequest(const protocol::EvaluateArguments &args) {
       last_nonempty_var_expression = expression;
   }
 
-  // "frame variable" is more reliable and faster than the expression parser,
-  // so always try it first; fall back to full expression evaluation unless
-  // the context is "hover" (too expensive to run arbitrary code there).
   lldb::SBValue value = frame.GetValueForVariablePath(expression.data(), lldb::eDynamicDontRunTarget);
 
-  // Freeze-dry the value in case the user expands it later in the console.
   if (value.GetError().Success() && args.context == protocol::eEvaluateContextRepl)
     value = value.Persist();
 
@@ -726,7 +695,7 @@ size_t GetPartialTokenCodeUnits(llvm::StringRef line, size_t cursor_pos) {
   llvm::SmallVector<llvm::UTF16, 20> utf16_token;
   if (llvm::convertUTF8ToUTF16String(byte_token, utf16_token))
     return utf16_token.size();
-  return byte_token.size(); // Fallback to byte offset.
+  return byte_token.size();
 }
 
 }  // namespace
@@ -737,7 +706,7 @@ protocol::CompletionsResponseBody DataManager::GetCompletionsRequest(const proto
 
   std::string text = args.text;
   const uint32_t line = args.line;
-  const uint32_t utf16_codeunits = args.column - 1; // column starts at 1.
+  const uint32_t utf16_codeunits = args.column - 1;
 
   const auto cursor_pos_opt = GetCursorPos(text, line, utf16_codeunits);
   if (!cursor_pos_opt)
@@ -745,7 +714,6 @@ protocol::CompletionsResponseBody DataManager::GetCompletionsRequest(const proto
 
   size_t cursor_pos = *cursor_pos_opt;
 
-  // If there's a frame, set it as selected so LLDB completes relative to it.
   lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
   if (frame.IsValid()) {
     lldb::SBThread frame_thread = frame.GetThread();
@@ -763,8 +731,6 @@ protocol::CompletionsResponseBody DataManager::GetCompletionsRequest(const proto
   }
 
   const size_t partial_token_cu = GetPartialTokenCodeUnits(text, cursor_pos);
-  // While the user is mid-input, intent (command vs variable) is often
-  // ambiguous - try completing as both, where applicable.
   const std::string expr_prefix = "expression -- ";
   const std::array<std::tuple<ReplMode, std::string, uint64_t>, 2> exprs = {
       {std::make_tuple(ReplMode::Command, text, cursor_pos),
@@ -781,8 +747,6 @@ protocol::CompletionsResponseBody DataManager::GetCompletionsRequest(const proto
     if (!interpreter.HandleCompletionWithDescriptions(expr_line.c_str(), expr_cursor, 0, 50, matches, descriptions))
       continue;
 
-    // Element 0 is the common substring after the cursor for all matches -
-    // skip it and use the rest.
     for (uint32_t i = 1; i < matches.GetSize(); i++) {
       const llvm::StringRef match = matches.GetStringAtIndex(i);
       const llvm::StringRef description = descriptions.GetStringAtIndex(i);
@@ -806,7 +770,6 @@ DataManager::GetLocationsRequest(const protocol::LocationsArguments &args) {
   std::lock_guard<lldb::SBMutex> guard(lock);
 
   protocol::LocationsResponseBody response;
-  // The lowest bit distinguishes a value location from a declaration location.
   auto [var_ref, is_value_location] = dap::UnpackLocation(args.locationReference);
   lldb::SBValue variable = variables.GetVariable(var_ref);
   if (!variable.IsValid())
@@ -858,34 +821,13 @@ protocol::Variable CreateVariable(lldb::SBValue v, int64_t var_ref, bool format_
   if (!desc.evaluate_name.empty())
     var.evaluateName = desc.evaluate_name;
 
-  // If we have a type with many children, we would like to be able to give a
-  // hint to the IDE that the type has indexed children so that the request
-  // can be broken up in grabbing only a few children at a time. We want to
-  // be careful and only call "v.GetNumChildren()" if we have an array type
-  // or if we have a synthetic child provider producing indexed children. We
-  // don't want to call "v.GetNumChildren()" on all objects as class, struct
-  // and union types don't need to be completed if they are never expanded.
-  // So we want to avoid calling this to only cases where it makes sense to
-  // keep performance high during normal debugging.
-
-  // If we have an array type, say that it is indexed and provide the number
-  // of children in case we have a huge array. If we don't do this, then we
-  // might take a while to produce all children at once which can delay your
-  // debug session.
   if (desc.type_obj.IsArrayType()) {
     var.indexedVariables = v.GetNumChildren();
   } else if (v.IsSynthetic()) {
-    // For a type with a synthetic child provider, the SBType of "v" won't
-    // tell us anything about what might be displayed. Instead, we check if
-    // the first child's name is "[0]" and then say it is indexed. We call
-    // GetNumChildren() only if the child name matches to avoid a
-    // potentially expensive operation.
     if (lldb::SBValue first_child = v.GetChildAtIndex(0)) {
       llvm::StringRef first_child_name = first_child.GetName();
       if (first_child_name == "[0]") {
         size_t num_children = v.GetNumChildren();
-        // If we are creating a "[raw]" fake child for each synthetic type,
-        // we have to account for it when returning indexed variables.
         if (synthetic_child_debugging)
           ++num_children;
         var.indexedVariables = num_children;

@@ -1,14 +1,3 @@
-//===-- breakpoint_manager.hpp --------------------------------------------===//
-//
-// The breakpoint component (see CLAUDE.md's DebugContext architecture):
-// composite owner of every breakpoint kind (source/function/instruction/
-// exception/watchpoint), carved out of debug_service::DebugService's
-// breakpoint surface - see PROJECT_STATUS.md. Backed by LldbProvider only
-// via DebugContext (the mediator); has no reference to any other component
-// or to debug_service.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_BREAKPOINT_MANAGER_HPP_
 #define TRAILER_CORE_COMPONENTS_BREAKPOINT_MANAGER_HPP_
 

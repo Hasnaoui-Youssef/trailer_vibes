@@ -28,22 +28,12 @@ class DisassemblyManager {
 public:
   explicit DisassemblyManager(DebugContext &context) : m_context(context) {}
 
-  /// Number of assembly lines to fall back to when serving `source` for a
-  /// source reference that has no debug info (see SourceRequestHandler).
   static constexpr uint32_t k_number_of_assembly_lines_for_nodebug = 32;
 
-  /// Disassembles `instruction_count` instructions starting at
-  /// `memory_reference + byte_offset`, adjusted by `instruction_offset`
-  /// instructions (which may be negative). Mirrors the `disassemble`
-  /// request's exact semantics, including padding with invalid
-  /// instructions when the requested range runs off either end.
   llvm::Expected<std::vector<dap::protocol::DisassembledInstruction>>
   Disassemble(lldb::addr_t memory_reference, int64_t byte_offset, int64_t instruction_offset,
               uint64_t instruction_count, bool resolve_symbols);
 
-  // Serves `source` for a source reference that resolves to an address
-  // rather than a file - falls back to k_number_of_assembly_lines_for_nodebug
-  // instructions when there's no symbol to bound the disassembly.
   llvm::Expected<dap::protocol::SourceResponseBody> GetSourceRequest(
       const dap::protocol::SourceArguments &args);
 

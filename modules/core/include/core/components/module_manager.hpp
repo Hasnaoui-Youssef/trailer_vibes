@@ -1,11 +1,3 @@
-//===-- module_manager.hpp ------------------------------------------------===//
-//
-// The module component (see CLAUDE.md's DebugContext architecture): source
-// resolution, source references and the loaded-module set. Carved out of
-// DebugService - see PROJECT_STATUS.md.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_MODULE_MANAGER_HPP_
 #define TRAILER_CORE_COMPONENTS_MODULE_MANAGER_HPP_
 
@@ -39,9 +31,6 @@ public:
   int32_t CreateSourceReference(lldb::addr_t address);
   std::optional<lldb::addr_t> GetSourceReferenceAddress(int32_t reference);
 
-  /// Converts a loaded module to a protocol::Module description. `id_only`
-  /// initializes only the module ID, used when reporting a "removed"
-  /// module event.
   std::optional<dap::protocol::Module> CreateModuleDescription(lldb::SBModule &module, bool id_only = false);
 
   llvm::Expected<dap::protocol::CompileUnitsResponseBody> GetCompileUnitsRequest(
@@ -51,9 +40,6 @@ public:
   llvm::Expected<dap::protocol::ModuleSymbolsResponseBody> GetModuleSymbolsRequest(
       const dap::protocol::ModuleSymbolsArguments &args);
 
-  /// The set of module IDs the client has already been told about (see the
-  /// `modules` request handler - it reports newly-seen modules and needs to
-  /// remember which ones it already reported).
   std::mutex modules_mutex;
   llvm::StringSet<> modules;
 

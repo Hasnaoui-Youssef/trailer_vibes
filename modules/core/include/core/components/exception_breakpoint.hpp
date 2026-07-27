@@ -1,12 +1,3 @@
-//===-- exception_breakpoint.hpp ------------------------------------------===//
-//
-// Relocated from debug_service/exception_breakpoint.hpp - see
-// breakpoint_base.hpp. Unlike the other node types, ExceptionBreakpoint
-// does not derive from BreakpointBase (matches the original design - it has
-// no condition/hit-condition base state to share).
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_EXCEPTION_BREAKPOINT_HPP_
 #define TRAILER_CORE_COMPONENTS_EXCEPTION_BREAKPOINT_HPP_
 

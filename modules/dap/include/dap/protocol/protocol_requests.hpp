@@ -165,6 +165,15 @@ struct AttachRequestArguments {
   std::string gdbRemoteHostname = "localhost";
   std::string coreFile;
   std::optional<DAPSession> session;
+
+  // Feeds providers::OpenOcdConfig once the engine owns starting OpenOCD
+  // itself; today the TypeScript extension still spawns it and only
+  // gdbRemotePort/gdbRemoteHostname above are ever populated.
+  std::vector<std::string> openocdScriptSearchDirs;
+  std::vector<std::string> openocdConfigFiles;
+  std::vector<std::string> openocdRawCommands;
+  std::string openocdLogFile = "openocd_logs.txt";
+  int32_t openocdDebugLevel = 2;
 };
 bool fromJSON(const llvm::json::Value &, AttachRequestArguments &,
               llvm::json::Path);

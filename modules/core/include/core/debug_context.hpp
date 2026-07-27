@@ -1,10 +1,3 @@
-//===-- debug_context.hpp -----------------------------------------------===//
-//
-// Runtime root: owns the LldbProvider, EventBus, and every domain
-// component. Components reach each other only through DebugContext.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_DEBUG_CONTEXT_HPP_
 #define TRAILER_CORE_DEBUG_CONTEXT_HPP_
 
@@ -50,9 +43,6 @@ public:
   lldb::SBTarget &Target() { return lldb_provider_.target; }
   lldb::SBMutex GetAPIMutex() const { return lldb_provider_.GetAPIMutex(); }
 
-  // Sole EventBus subscriber (dap_handlers' event_translator, see
-  // event_bus.hpp) converts each DomainEvent into a wire event - core never
-  // builds JSON itself.
   EventBus &Events() { return event_bus_; }
   void SendOutput(OutputCategory category, llvm::StringRef text);
   void Emit(DomainEvent event);
@@ -86,7 +76,6 @@ public:
   void RunStopCommands();
   void RunExitCommands();
 
-  // Diagnostic (stderr-only, not wire protocol) logging seam.
   using LogDiagnosticFn = std::function<void(std::string)>;
   void SetLogDiagnostic(LogDiagnosticFn fn) { log_diagnostic_ = std::move(fn); }
   void LogDiagnostic(std::string message) { log_diagnostic_(std::move(message)); }
@@ -109,17 +98,12 @@ public:
 
   void SendTerminatedEvent();
 
-  // Propagates stop signals to upper layers
   void SetRequestStop(RunCommandsFn fn) { request_stop_ = std::move(fn); }
   void RequestStop() { request_stop_(); }
 
   void SetFrameFormat(llvm::StringRef format);
   void SetThreadFormat(llvm::StringRef format);
 
-  // No layer above core may name an lldb:: type; each of these locks
-  // GetAPIMutex internally for its own duration. IsInterruptRequested/
-  // CancelInterruptRequest don't: interrupt flags are orthogonal to the
-  // target API mutex.
   bool IsInterruptRequested();
   void CancelInterruptRequest();
   std::string ExecutablePath();

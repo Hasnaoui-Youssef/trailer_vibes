@@ -342,7 +342,12 @@ bool fromJSON(const json::Value &Params, AttachRequestArguments &ARA,
                  O.mapOptional("gdb-remote-port", ARA.gdbRemotePort) &&
                  O.mapOptional("gdb-remote-hostname", ARA.gdbRemoteHostname) &&
                  O.mapOptional("coreFile", ARA.coreFile) &&
-                 O.mapOptional("session", ARA.session);
+                 O.mapOptional("session", ARA.session) &&
+                 O.mapOptional("openocd-script-search-dirs", ARA.openocdScriptSearchDirs) &&
+                 O.mapOptional("openocd-config-files", ARA.openocdConfigFiles) &&
+                 O.mapOptional("openocd-raw-commands", ARA.openocdRawCommands) &&
+                 O.mapOptional("openocd-log-file", ARA.openocdLogFile) &&
+                 O.mapOptional("openocd-debug-level", ARA.openocdDebugLevel);
   if (!success)
     return false;
   // Validate that we have a well formed attach request.

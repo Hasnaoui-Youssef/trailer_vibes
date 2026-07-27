@@ -22,6 +22,7 @@ add_library(core
         src/components/exception_breakpoint.cc
         src/components/watchpoint.cc
         src/components/memory_manager.cc
+        src/components/openocd_memory_strategy.cc
         src/components/disassembly_manager.cc
         src/components/module_manager.cc
         src/components/data_manager.cc
@@ -35,6 +36,7 @@ target_include_directories(core PUBLIC
 
 target_link_libraries(core PUBLIC
     lldb_provider
+    openocd_provider
     dap_protocol
 )
 

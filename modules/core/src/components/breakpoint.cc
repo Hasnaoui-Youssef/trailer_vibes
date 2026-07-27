@@ -53,14 +53,6 @@ protocol::Breakpoint Breakpoint::ToProtocolBreakpoint() {
 
   breakpoint.verified = m_bp.GetNumResolvedLocations() > 0;
   breakpoint.id = m_bp.GetID();
-  // VS Code doesn't currently allow one breakpoint to have multiple
-  // locations so we just report the first one. If we report all locations
-  // then the IDE starts showing the wrong line numbers and locations for
-  // other source file and line breakpoints in the same file.
-
-  // Below we search for the first resolved location in a breakpoint and report
-  // this as the breakpoint location since it will have a complete location
-  // that is at least loaded in the current process.
   lldb::SBBreakpointLocation bp_loc;
   const auto num_locs = m_bp.GetNumLocations();
   for (size_t i = 0; i < num_locs; ++i) {
@@ -68,7 +60,6 @@ protocol::Breakpoint Breakpoint::ToProtocolBreakpoint() {
     if (bp_loc.IsResolved())
       break;
   }
-  // If not locations are resolved, use the first location.
   if (!bp_loc.IsResolved())
     bp_loc = m_bp.GetLocationAtIndex(0);
   auto bp_addr = bp_loc.GetAddress();
@@ -98,8 +89,6 @@ protocol::Breakpoint Breakpoint::ToProtocolBreakpoint() {
                 .GetSize() +
             1;
 
-        // Add persistent data so that the breakpoint can be resolved
-        // in future sessions.
         std::optional<protocol::PersistenceData> persistence_data =
             GetPersistenceDataForSymbol(symbol);
         if (persistence_data) {

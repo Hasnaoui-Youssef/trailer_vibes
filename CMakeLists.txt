@@ -60,6 +60,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(opencsd)
 FetchContent_MakeAvailable(nlohmann_json)
 
+add_subdirectory(external/openocd)
 add_subdirectory(modules/common)
 add_subdirectory(modules/providers)
 add_subdirectory(modules/dap)

@@ -1,10 +1,3 @@
-//===-- instruction_breakpoint.hpp ----------------------------------------===//
-//
-// Relocated from debug_service/instruction_breakpoint.hpp - see
-// breakpoint_base.hpp.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_INSTRUCTION_BREAKPOINT_HPP_
 #define TRAILER_CORE_COMPONENTS_INSTRUCTION_BREAKPOINT_HPP_
 
@@ -15,13 +8,11 @@
 
 namespace core {
 
-/// Instruction Breakpoint
 class InstructionBreakpoint : public Breakpoint {
 public:
   InstructionBreakpoint(DebugContext &context,
                          const protocol::InstructionBreakpoint &breakpoint);
 
-  /// Set instruction breakpoint in LLDB as a new breakpoint.
   void SetBreakpoint();
 
   lldb::addr_t GetInstructionAddressReference() const {

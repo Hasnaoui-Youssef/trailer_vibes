@@ -1,9 +1,3 @@
-//===-- watchpoint.hpp -----------------------------------------------------===//
-//
-// Relocated from debug_service/watchpoint.hpp - see breakpoint_base.hpp.
-//
-//===----------------------------------------------------------------------===//
-
 #ifndef TRAILER_CORE_COMPONENTS_WATCHPOINT_HPP_
 #define TRAILER_CORE_COMPONENTS_WATCHPOINT_HPP_
 
@@ -35,7 +29,6 @@ protected:
   lldb::addr_t m_addr;
   size_t m_size;
   lldb::SBWatchpointOptions m_options;
-  /// The LLDB breakpoint associated wit this watchpoint.
   lldb::SBWatchpoint m_wp;
   lldb::SBError m_error;
 };

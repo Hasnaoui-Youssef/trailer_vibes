@@ -8,6 +8,7 @@
 
 add_subdirectory(lldb_provider)
 add_subdirectory(disassembler)
+add_subdirectory(openocd_provider)
 
 add_subdirectory(trace/trace_model)
 add_subdirectory(trace/trace_sink)
