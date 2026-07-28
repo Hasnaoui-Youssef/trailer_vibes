@@ -1,12 +1,15 @@
 #include "dap/session.hpp"
 
+#include "core/components/disassembly_manager.hpp"
 #include "core/debug_context.hpp"
 #include "core/event_bus.hpp"
 #include "dap/dap_log.hpp"
 #include "dap/orchestrator.hpp"
 #include "dap/protocol/protocol_base.hpp"
 #include "dap/protocol/protocol_requests.hpp"
+#include "dap/protocol_support.hpp"
 #include "dap/json_utils.hpp"
+#include "disassembler/program_disassembler.hpp"
 #include "handlers/capabilities.hpp"
 #include "handlers/register_handlers.hpp"
 #include "llvm/Support/JSON.h"
@@ -18,6 +21,74 @@ namespace dap {
 namespace {
 
 std::mutex g_log_mutex;
+
+llvm::json::Array ToJSON(const std::vector<model::InlineFrame> &frames) {
+    llvm::json::Array result;
+    for (const model::InlineFrame &frame : frames) {
+        result.push_back(llvm::json::Object{
+            {"function", frame.function}, {"file", frame.file}, {"line", frame.line}, {"column", frame.column}});
+    }
+    return result;
+}
+
+llvm::json::Array ResolvedFrames(uint64_t address, const disasm::ProgramDisassembler *program) {
+    if (!program)
+        return {};
+    const model::InstructionInfo *info = program->InstructionInfoAt(address);
+    if (!info)
+        return {};
+    return ToJSON(info->location.frames);
+}
+
+llvm::json::Value ToJSON(const model::ReconstructedInstruction &instruction,
+                          const disasm::ProgramDisassembler *program) {
+    const model::DecodedInstruction &insn = instruction.insn;
+    return llvm::json::Object{
+        {"address", EncodeMemoryReference(insn.address)},
+        {"bytes", insn.bytes},
+        {"mnemonic", insn.mnemonic},
+        {"operands", insn.operands},
+        {"traceIndex", instruction.trace_index},
+        {"traceId", instruction.trace_id},
+        {"frames", ResolvedFrames(insn.address, program)},
+    };
+}
+
+llvm::json::Value ToJSON(const model::LineBlock &block, const disasm::ProgramDisassembler *program) {
+    return llvm::json::Object{
+        {"startAddress", EncodeMemoryReference(block.start_addr)},
+        {"endAddress", EncodeMemoryReference(block.end_addr)},
+        {"instructionCount", block.instr_count},
+        {"frames", ResolvedFrames(block.start_addr, program)},
+        {"traceIndex", block.trace_index},
+        {"traceId", block.trace_id},
+    };
+}
+
+llvm::json::Value ToJSON(const model::FunctionBlock &block, const disasm::ProgramDisassembler *program) {
+    llvm::json::Array line_blocks;
+    for (const model::LineBlock &line_block : block.line_blocks)
+        line_blocks.push_back(ToJSON(line_block, program));
+    return llvm::json::Object{
+        {"functionName", block.function_name},
+        {"entryAddress", EncodeMemoryReference(block.entry_addr)},
+        {"lineBlocks", std::move(line_blocks)},
+    };
+}
+
+const char *ToString(model::GapReason reason) {
+    switch (reason) {
+    case model::GapReason::kCaptureBoundary: return "captureBoundary";
+    case model::GapReason::kTraceOn: return "traceOn";
+    case model::GapReason::kOverflow: return "overflow";
+    case model::GapReason::kNoSync: return "noSync";
+    }
+    return "unknown";
+}
+
+llvm::json::Value ToJSON(const model::TraceGap &gap) {
+    return llvm::json::Object{{"instructionIndex", gap.instruction_index}, {"reason", ToString(gap.reason)}};
+}
 
 class SessionImpl final : public Session {
 public:
@@ -85,6 +156,38 @@ private:
     void HandleDomainEvent(const core::MemoryEvent &event) { SendTypedEvent("memory", event.body); }
     void HandleDomainEvent(const core::ModuleEvent &event) { SendTypedEvent("module", event.body); }
     void HandleDomainEvent(const core::BreakpointEvent &event) { SendTypedEvent("breakpoint", event.body); }
+
+    void HandleDomainEvent(const core::TraceDataEvent &event) {
+        llvm::Expected<const disasm::ProgramDisassembler &> program = context_.Disassembly().Program();
+        const disasm::ProgramDisassembler *program_ptr = nullptr;
+        if (program) {
+            program_ptr = &*program;
+        } else {
+            DAP_LOG(log_, "trailerTraceData: source frames unavailable: {0}", llvm::toString(program.takeError()));
+        }
+
+        llvm::json::Array instructions;
+        for (const model::ReconstructedInstruction &instruction : event.instructions)
+            instructions.push_back(ToJSON(instruction, program_ptr));
+
+        llvm::json::Array function_blocks;
+        for (const model::FunctionBlock &block : event.function_blocks)
+            function_blocks.push_back(ToJSON(block, program_ptr));
+
+        llvm::json::Array gaps;
+        for (const model::TraceGap &gap : event.gaps)
+            gaps.push_back(ToJSON(gap));
+
+        orchestrator_.Send(dap::protocol::Event{
+            "trailerTraceData",
+            llvm::json::Object{
+                {"firstInstructionIndex", event.first_instruction_index},
+                {"firstFunctionBlockIndex", event.first_function_block_index},
+                {"instructions", std::move(instructions)},
+                {"functionBlocks", std::move(function_blocks)},
+                {"gaps", std::move(gaps)},
+            }});
+    }
 
     void HandleDomainEvent(const core::TerminatedEvent &event) {
         dap::protocol::Event evt{"terminated"};

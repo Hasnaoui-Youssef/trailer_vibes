@@ -18,6 +18,8 @@
 #include "lldb/lldb-types.h"
 #include "lldb_provider/lldb_provider.hpp"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Error.h"
+#include "openocd_provider/openocd_provider.hpp"
 
 namespace core {
 
@@ -30,6 +32,7 @@ class ModuleManager;
 class DataManager;
 class ExecutionController;
 class TargetManager;
+class TraceManager;
 
 class DebugContext {
 public:
@@ -42,6 +45,14 @@ public:
   providers::LldbProvider &Lldb() { return lldb_provider_; }
   lldb::SBTarget &Target() { return lldb_provider_.target; }
   lldb::SBMutex GetAPIMutex() const { return lldb_provider_.GetAPIMutex(); }
+
+  llvm::Error CreateOpenOcd(const providers::OpenOcdConfig &config);
+  providers::OpenOcdProvider *OpenOcd() { return openocd_provider_ ? &*openocd_provider_ : nullptr; }
+  void ShutdownOpenOcd();
+
+  llvm::Error CreateTrace();
+  TraceManager *Trace() { return trace_manager_.get(); }
+  void ShutdownTrace();
 
   EventBus &Events() { return event_bus_; }
   void SendOutput(OutputCategory category, llvm::StringRef text);
@@ -68,9 +79,6 @@ public:
 
   llvm::StringRef CommandEscapePrefix() const { return command_escape_prefix_; }
   void SetCommandEscapePrefix(llvm::StringRef value) { command_escape_prefix_ = value.str(); }
-
-  lldb::pid_t RestartingProcessId() const;
-  void SetRestartingProcessId(lldb::pid_t value);
 
   using RunCommandsFn = std::function<void()>;
   void RunStopCommands();
@@ -114,6 +122,11 @@ public:
 
 private:
   providers::LldbProvider lldb_provider_;
+  // Declared here, not with the components below: members destroy in
+  // reverse declaration order, and ExecutionController's event thread must
+  // be joined (a component destructor) before this provider can safely go
+  // away, since that thread may still be inside an OpenOCD provider call.
+  std::optional<providers::OpenOcdProvider> openocd_provider_;
   EventBus event_bus_;
   bool auto_variable_summaries_ = false;
   std::string command_escape_prefix_;
@@ -130,6 +143,10 @@ private:
   std::unique_ptr<DataManager> data_manager_;
   std::unique_ptr<ExecutionController> execution_controller_;
   std::unique_ptr<TargetManager> target_manager_;
+  // Declared last (destroys first): its destructor synchronously
+  // unsubscribes from the OpenOCD capture callback, which must happen
+  // before disassembly_manager_ (and everything else above) is torn down.
+  std::unique_ptr<TraceManager> trace_manager_;
 };
 
 }  // namespace core

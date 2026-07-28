@@ -758,13 +758,9 @@ void ExecutionController::HandleProcessEvent(const lldb::SBEvent &event, bool &p
       process.GetStatus(stream);
       m_context.SendOutput(OutputCategory::Console, stream.GetData());
 
-      // When restarting, we can get an "exited" event for the process we
-      // just killed with the old PID, or even with no PID. In that case
-      // we don't have to terminate the session.
-      if (process.GetProcessID() == LLDB_INVALID_PROCESS_ID ||
-          process.GetProcessID() == m_context.RestartingProcessId()) {
-        m_context.SetRestartingProcessId(LLDB_INVALID_PROCESS_ID);
-      } else {
+      // An "exited" event with no valid PID carries no process to report on
+      // - nothing to terminate the session over.
+      if (process.GetProcessID() != LLDB_INVALID_PROCESS_ID) {
         m_context.RunExitCommands();
         SendProcessExitedEvent(process);
         // SendTerminatedEvent is a TargetManager-domain method (runs

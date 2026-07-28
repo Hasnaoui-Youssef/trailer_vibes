@@ -18,6 +18,9 @@ target_include_directories(openocd_provider PUBLIC
 target_link_libraries(openocd_provider PRIVATE
     openocd
 )
+target_link_libraries(openocd_provider PUBLIC
+    trace_model
+)
 
 # openocd_exit.c defines the symbol external/openocd/cmake/openocd_exit.h
 # force-includes into every OpenOCD translation unit; pull that declaration

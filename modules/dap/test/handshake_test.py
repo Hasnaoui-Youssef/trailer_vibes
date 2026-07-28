@@ -89,8 +89,6 @@ def main() -> int:
         proc.kill()
         print(f"handshake_test: FAILED reading adapter output: {e}", file=sys.stderr)
         return 1
-    finally:
-        proc.stdin.close()
 
     ok = True
 
@@ -103,7 +101,35 @@ def main() -> int:
     elif "body" not in response:
         print(f"handshake_test: FAILED initialize response has no body/capabilities: {response}", file=sys.stderr)
         ok = False
+    elif not response["body"].get("supportsTraceRequests"):
+        print(f"handshake_test: FAILED initialize response did not report supportsTraceRequests: {response}",
+              file=sys.stderr)
+        ok = False
 
+    # No session has been launched, so trailerTraceEnable/Disable/Status are
+    # expected to fail (no core::TraceManager) - the property under test is
+    # that they're recognized commands at all, not "unrecognized request".
+    if ok:
+        for seq, command in enumerate(("trailerTraceEnable", "trailerTraceDisable", "trailerTraceStatus"), start=2):
+            proc.stdin.write(frame({"type": "request", "seq": seq, "command": command}))
+            proc.stdin.flush()
+            try:
+                trace_response = read_message(proc.stdout)
+            except (EOFError, ValueError) as e:
+                print(f"handshake_test: FAILED reading response for '{command}': {e}", file=sys.stderr)
+                ok = False
+                break
+            if trace_response.get("type") != "response" or trace_response.get("command") != command:
+                print(f"handshake_test: FAILED expected a '{command}' response, got: {trace_response}",
+                      file=sys.stderr)
+                ok = False
+                break
+            if "unrecognized request" in trace_response.get("message", ""):
+                print(f"handshake_test: FAILED '{command}' was not recognized: {trace_response}", file=sys.stderr)
+                ok = False
+                break
+
+    proc.stdin.close()
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -111,7 +137,7 @@ def main() -> int:
         proc.kill()
 
     if ok:
-        print("handshake_test: OK (initialize -> capabilities)")
+        print("handshake_test: OK (initialize -> capabilities -> trace commands recognized)")
         return 0
     return 1
 

@@ -45,15 +45,19 @@ int Fail(const std::string &message) {
     return EXIT_FAILURE;
 }
 
+bool EndsWith(const std::string &value, const std::string &suffix) {
+    return value.size() >= suffix.size() && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 bool CheckFrame(const model::InlineFrame &frame, const std::string &function, uint32_t line, const std::string &what) {
-    // DWARF embeds the compilation-unit name from when dwarf_fixture.elf
-    // was originally compiled ("fixture.c") - renaming the file on disk
-    // (this repo's dwarf_fixture.c/.elf) doesn't change what's already
-    // baked into the debug info without recompiling.
-    if (frame.function != function || frame.file != "fixture.c" || frame.line != line) {
+    // ProgramDisassembler resolves AbsoluteFilePath, i.e. DW_AT_comp_dir (baked
+    // into dwarf_fixture.elf from whichever machine originally compiled it,
+    // not this one) joined with the compilation-unit name ("fixture.c") -
+    // only the suffix is stable across machines/checkouts.
+    if (frame.function != function || !EndsWith(frame.file, "/fixture.c") || frame.line != line) {
         std::cerr << "program_disassembler_test: " << what << ": got function='" << frame.function << "' file='"
                    << frame.file << "' line=" << frame.line << ", expected function='" << function
-                   << "' file='fixture.c' line=" << line << "\n";
+                   << "' file ending in '/fixture.c' line=" << line << "\n";
         return false;
     }
     return true;

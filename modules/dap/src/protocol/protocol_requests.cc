@@ -18,50 +18,6 @@
 
 using namespace llvm;
 
-// The 'env' field is either an object as a map of strings or as an array of
-// strings formatted like 'key=value'.
-static bool parseEnv(const json::Value &Params, StringMap<std::string> &env,
-                     json::Path P) {
-  const json::Object *O = Params.getAsObject();
-  if (!O) {
-    P.report("expected object");
-    return false;
-  }
-
-  const json::Value *value = O->get("env");
-  if (!value)
-    return true;
-
-  if (const json::Object *env_obj = value->getAsObject()) {
-    for (const auto &kv : *env_obj) {
-      const std::optional<StringRef> value = kv.second.getAsString();
-      if (!value) {
-        P.field("env").field(kv.first).report("expected string value");
-        return false;
-      }
-      env.insert({kv.first.str(), value->str()});
-    }
-    return true;
-  }
-
-  if (const json::Array *env_arr = value->getAsArray()) {
-    for (size_t i = 0; i < env_arr->size(); ++i) {
-      const std::optional<StringRef> value = (*env_arr)[i].getAsString();
-      if (!value) {
-        P.field("env").index(i).report("expected string");
-        return false;
-      }
-      std::pair<StringRef, StringRef> kv = value->split("=");
-      env.insert({kv.first, kv.second.str()});
-    }
-
-    return true;
-  }
-
-  P.field("env").report("invalid format, expected array or object");
-  return false;
-}
-
 static bool parseTimeout(const json::Value &Params, std::chrono::seconds &S,
                          json::Path P) {
   const json::Object *O = Params.getAsObject();
@@ -264,58 +220,37 @@ json::Value toJSON(const BreakpointLocationsResponseBody &BLRB) {
   return json::Object{{"breakpoints", BLRB.breakpoints}};
 }
 
-bool fromJSON(const json::Value &Params, Console &C, json::Path P) {
-  auto oldFormatConsole = Params.getAsBoolean();
-  if (oldFormatConsole) {
-    C = *oldFormatConsole ? eConsoleIntegratedTerminal : eConsoleInternal;
-    return true;
-  }
-  auto newFormatConsole = Params.getAsString();
-  if (!newFormatConsole) {
-    P.report("expected a string");
+bool fromJSON(const json::Value &Params, OpenOcdConfiguration &OC,
+              json::Path P) {
+  json::ObjectMapper O(Params, P);
+  bool success = O && O.mapOptional("scriptSearchDirs", OC.scriptSearchDirs) &&
+                 O.mapOptional("configFiles", OC.configFiles) &&
+                 O.mapOptional("rawCommands", OC.rawCommands) &&
+                 O.mapOptional("logFile", OC.logFile) &&
+                 O.mapOptional("debugLevel", OC.debugLevel) &&
+                 O.mapOptional("gdbPort", OC.gdbPort) &&
+                 O.mapOptional("tclPort", OC.tclPort) &&
+                 O.mapOptional("telnetPort", OC.telnetPort);
+  if (!success)
+    return false;
+  if (OC.gdbPort == "0" || OC.gdbPort == "disabled") {
+    P.field("gdbPort").report(
+        "must be a concrete port: the engine has no way to read back an "
+        "OpenOCD-assigned ephemeral port before connecting LLDB to it");
     return false;
   }
-
-  std::optional<Console> console =
-      StringSwitch<std::optional<Console>>(*newFormatConsole)
-          .Case("internalConsole", eConsoleInternal)
-          .Case("integratedTerminal", eConsoleIntegratedTerminal)
-          .Case("externalTerminal", eConsoleExternalTerminal)
-          .Default(std::nullopt);
-  if (!console) {
-    P.report("unexpected value, expected 'internalConsole', "
-             "'integratedTerminal' or 'externalTerminal'");
-    return false;
-  }
-
-  C = *console;
   return true;
 }
 
 bool fromJSON(const json::Value &Params, LaunchRequestArguments &LRA,
               json::Path P) {
   json::ObjectMapper O(Params, P);
-  bool success =
-      O && fromJSON(Params, LRA.configuration, P) &&
-      O.mapOptional("noDebug", LRA.noDebug) &&
-      O.mapOptional("launchCommands", LRA.launchCommands) &&
-      O.mapOptional("cwd", LRA.cwd) && O.mapOptional("args", LRA.args) &&
-      O.mapOptional("detachOnError", LRA.detachOnError) &&
-      O.mapOptional("disableASLR", LRA.disableASLR) &&
-      O.mapOptional("disableSTDIO", LRA.disableSTDIO) &&
-      O.mapOptional("shellExpandArguments", LRA.shellExpandArguments) &&
-      O.mapOptional("runInTerminal", LRA.console) &&
-      O.mapOptional("console", LRA.console) &&
-      O.mapOptional("stdio", LRA.stdio) && parseEnv(Params, LRA.env, P);
+  bool success = O && fromJSON(Params, LRA.configuration, P) &&
+                 O.mapOptional("noDebug", LRA.noDebug) &&
+                 O.mapOptional("launchCommands", LRA.launchCommands) &&
+                 O.mapOptional("openocd", LRA.openocd);
   if (!success)
     return false;
-  // Validate that we have a well formed launch request.
-  if (!LRA.launchCommands.empty() &&
-      LRA.console != protocol::eConsoleInternal) {
-    P.report(
-        "'launchCommands' and non-internal 'console' are mutually exclusive");
-    return false;
-  }
   if (LRA.configuration.program.empty() && LRA.launchCommands.empty()) {
     P.report("'program' or 'launchCommands' should be provided");
     return false;
@@ -342,12 +277,7 @@ bool fromJSON(const json::Value &Params, AttachRequestArguments &ARA,
                  O.mapOptional("gdb-remote-port", ARA.gdbRemotePort) &&
                  O.mapOptional("gdb-remote-hostname", ARA.gdbRemoteHostname) &&
                  O.mapOptional("coreFile", ARA.coreFile) &&
-                 O.mapOptional("session", ARA.session) &&
-                 O.mapOptional("openocd-script-search-dirs", ARA.openocdScriptSearchDirs) &&
-                 O.mapOptional("openocd-config-files", ARA.openocdConfigFiles) &&
-                 O.mapOptional("openocd-raw-commands", ARA.openocdRawCommands) &&
-                 O.mapOptional("openocd-log-file", ARA.openocdLogFile) &&
-                 O.mapOptional("openocd-debug-level", ARA.openocdDebugLevel);
+                 O.mapOptional("session", ARA.session);
   if (!success)
     return false;
   // Validate that we have a well formed attach request.
@@ -825,5 +755,10 @@ llvm::json::Value toJSON(const StackTraceResponseBody &Body) {
 
   return result;
 }
+
+llvm::json::Value toJSON(const TraceStatusResponseBody &Body) {
+    return llvm::json::Value(json::Object{{"enabled", Body.enabled}});
+}
+
 
 } // namespace dap::protocol

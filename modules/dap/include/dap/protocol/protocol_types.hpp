@@ -325,8 +325,12 @@ enum AdapterFeature : unsigned {
   /// The debug adapter supports the `supportsModuleSymbols` request.
   /// This request is a custom request of lldb-dap.
   eAdapterFeatureSupportsModuleSymbolsRequest,
+  /// The debug adapter supports the `trailerTraceEnable`,
+  /// `trailerTraceDisable`, and `trailerTraceStatus` requests, and emits
+  /// `trailerTraceData` events. These are custom requests of trailer.
+  eAdapterFeatureSupportsTraceRequests,
   eAdapterFeatureFirst = eAdapterFeatureANSIStyling,
-  eAdapterFeatureLast = eAdapterFeatureSupportsModuleSymbolsRequest,
+  eAdapterFeatureLast = eAdapterFeatureSupportsTraceRequests,
 };
 bool fromJSON(const llvm::json::Value &, AdapterFeature &, llvm::json::Path);
 llvm::json::Value toJSON(const AdapterFeature &);

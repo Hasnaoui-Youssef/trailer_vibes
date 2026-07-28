@@ -6,6 +6,7 @@
 
 #include <mutex>
 
+#include "core/components/target_manager.hpp"
 #include "core/debug_context.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
@@ -228,6 +229,25 @@ DisassemblyManager::GetSourceRequest(const protocol::SourceArguments &args) {
   lldb::SBExecutionContext exe_ctx(m_context.Target());
   insts.GetDescription(stream, exe_ctx);
   return protocol::SourceResponseBody{/*content=*/stream.GetData(), /*mimeType=*/"text/x-lldb.disassembly"};
+}
+
+llvm::Expected<const disasm::ProgramDisassembler &> DisassemblyManager::Program() {
+  const std::string &program_path = m_context.Session().configuration.program;
+  if (program_ && program_path_ == program_path)
+    return *program_;
+
+  std::expected<disasm::ProgramDisassembler, std::string> result = disasm::ProgramDisassembler::Create(program_path);
+  if (!result)
+    return llvm::make_error<dap::DAPError>(result.error());
+
+  program_ = std::move(*result);
+  program_path_ = program_path;
+  return *program_;
+}
+
+void DisassemblyManager::InvalidateProgram() {
+  program_.reset();
+  program_path_.clear();
 }
 
 }  // namespace core

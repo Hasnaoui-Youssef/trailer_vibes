@@ -5,8 +5,6 @@
 
 _Thread_local struct openocd_jmp_state g_openocd_jmp;
 
-/* Declared in external/openocd/cmake/openocd_exit.h and force-included into
- * every OpenOCD translation unit; this is its only definition. */
 _Noreturn void openocd_exit(int code) {
     if (g_openocd_jmp.armed) {
         g_openocd_jmp.armed = 0;

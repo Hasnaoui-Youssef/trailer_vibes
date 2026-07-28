@@ -50,11 +50,6 @@ void BaseRequestHandler::Run(const Request &request) {
   operator()(request);
 }
 
-llvm::Error BaseRequestHandler::LaunchProcess(
-    const protocol::LaunchRequestArguments &arguments) const {
-  return context_.Session().LaunchProcess(arguments);
-}
-
 void BaseRequestHandler::PrintWelcomeMessage() const {
   std::string message;
   llvm::raw_string_ostream OS(message);

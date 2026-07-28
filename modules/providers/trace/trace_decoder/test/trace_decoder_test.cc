@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "trace_decoder/instruction_trace_decode_config.hpp"
+#include "trace_model/instruction_trace_decode_config.hpp"
 #include "trace_decoder/trace_decoder.hpp"
 #include "trace_model/load_segment.hpp"
 #include "trace_sink/trace_record.hpp"
@@ -62,35 +62,35 @@ int main(int argc, char **argv) {
 
     // ETMv4 registers + deformatter config captured from a real Cortex-M7
     // target alongside TRAILER_SAMPLE_TRACE_DUMP_PATH.
-    decode::Etmv4Registers regs;
-    regs.trcconfigr = 9;
-    regs.trctraceidr = 1;
-    regs.trcidr0 = 134219489;
-    regs.trcidr1 = 1090581505;
-    regs.trcidr2 = 4;
-    regs.trcidr3 = 118030340;
-    regs.trcidr4 = 1130496;
-    regs.trcidr5 = 2428960770;
-    regs.trcidr8 = 0;
-    regs.trcidr9 = 0;
-    regs.trcidr10 = 0;
-    regs.trcidr11 = 0;
-    regs.trcidr12 = 1;
-    regs.trcidr13 = 0;
-    regs.trcauthstatus = 192;
+    model::Etmv4Registers regs;
+    regs.trcconfigr = 0x00000009;
+    regs.trctraceidr = 0x00000001;
+    regs.trcidr0 = 0x080006E1;
+    regs.trcidr1 = 0x4100F401;
+    regs.trcidr2 = 0x00000004;
+    regs.trcidr3 = 0x07090004;
+    regs.trcidr4 = 0x00114000;
+    regs.trcidr5 = 0x90C70002;
+    regs.trcidr8 = 0x00000000;
+    regs.trcidr9 = 0x00000000;
+    regs.trcidr10 = 0x00000000;
+    regs.trcidr11 = 0x00000000;
+    regs.trcidr12 = 0x00000001;
+    regs.trcidr13 = 0x00000000;
+    regs.trcauthstatus = 0x000000C0;
 
-    decode::DeformatterConfig deformatter;
-    deformatter.source_format = decode::TraceSourceFormat::kFrameFormatted;
-    deformatter.frame_sync = decode::FrameSyncMode::kMemAligned;
+    model::DeformatterConfig deformatter;
+    deformatter.source_format = model::TraceSourceFormat::kFrameFormatted;
+    deformatter.frame_sync = model::FrameSyncMode::kMemAligned;
     deformatter.reset_on_4x_fsync = true;
 
-    decode::InstructionTraceDecodeConfig::Builder builder;
+    model::InstructionTraceDecodeConfig::Builder builder;
     builder.SetProgramPath(elf_path)
         .SetCoreName("Cortex-M7")
         .SetDeformatter(deformatter)
         .SetRegisters(regs)
         .SetTraceData(std::move(*trace_data));
-    const decode::InstructionTraceDecodeConfig config = std::move(builder).Build();
+    const model::InstructionTraceDecodeConfig config = std::move(builder).Build();
 
     decode::TraceDecoder decoder;
     const std::expected<std::vector<trace::TraceRecord>, std::string> decode_result =

@@ -4,9 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
+
+#include <trace_model/instruction_trace_decode_config.hpp>
 
 #include "openocd_provider/memory_selector.hpp"
 #include "openocd_provider/openocd_config.hpp"
@@ -14,9 +18,6 @@
 
 namespace providers {
 
-// One instance per process (see Phase 0: all_targets, adapter_driver and
-// the rest of OpenOCD's state are process-wide globals, not owned by this
-// object). Create() enforces that with a static guard.
 class OpenOcdProvider {
  public:
     static std::expected<OpenOcdProvider, std::string> Create(const OpenOcdConfig& config);
@@ -27,27 +28,29 @@ class OpenOcdProvider {
     OpenOcdProvider& operator=(OpenOcdProvider&&) noexcept;
     ~OpenOcdProvider();
 
+    std::expected<std::string, std::string> GetCoreName();
+
     std::expected<std::vector<std::byte>, std::string> ReadMemory(const MemorySelector& selector, uint64_t address,
                                                                     uint32_t size);
     std::expected<void, std::string> WriteMemory(const MemorySelector& selector, uint64_t address,
                                                    const std::vector<std::byte>& data);
 
-    // Escape hatch for anything not covered by the API above (reset
-    // strategies, adapter diagnostics, ...): breakpoints/execution/variables
-    // stay LLDB's job, so this module never grows a first-class API for
-    // them.
     std::expected<void, std::string> RunTclCommand(const std::string& command);
 
     std::expected<std::vector<TmcObject>, std::string> ListTraceSinks();
     std::expected<std::vector<Etmv4Object>, std::string> ListTraceSources();
+    std::expected<model::Etmv4Registers, std::string> ReadETMv4Registers(const std::string& name);
+
+    using TraceDataCallback = std::function<void(std::span<const std::byte> data, bool is_barrier)>;
+    // TMC only for now. `callback` runs on OpenOCD's server thread, inside
+    // the TARGET_EVENT_HALTED handler that drains the buffer - see arm_tmc.c.
+    std::expected<void, std::string> SubscribeTrace(const std::string& name, TraceDataCallback callback);
+    std::expected<void, std::string> UnsubscribeTrace(const std::string& name);
+
     std::expected<void, std::string> EnableTrace(const std::string& name);
     std::expected<void, std::string> DisableTrace(const std::string& name);
-    std::expected<std::vector<std::byte>, std::string> ExtractTrace(const std::string& name);
 
-    // options is a literal Tcl 'configure' argument list, e.g.
-    // "-mode circular -bufwm 4096" - going through the same in-process Tcl
-    // command a config file would use, not a remote service (see arm_tmc.h's
-    // jim_tmc_configure / arm_etmv4.c's equivalent for what this accepts).
+    // options is a literal Tcl 'configure' argument list
     std::expected<void, std::string> ConfigureTrace(const std::string& name, const std::string& options);
 
  private:

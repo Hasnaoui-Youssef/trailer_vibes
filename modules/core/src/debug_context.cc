@@ -8,6 +8,7 @@
 #include "core/components/memory_manager.hpp"
 #include "core/components/module_manager.hpp"
 #include "core/components/target_manager.hpp"
+#include "core/components/trace_manager.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
 #include "dap/protocol/protocol_events.hpp"
@@ -35,8 +36,25 @@ DebugContext::DebugContext()
 // the includes above.
 DebugContext::~DebugContext() = default;
 
-lldb::pid_t DebugContext::RestartingProcessId() const { return target_manager_->restarting_process_id; }
-void DebugContext::SetRestartingProcessId(lldb::pid_t value) { target_manager_->restarting_process_id = value; }
+llvm::Error DebugContext::CreateOpenOcd(const providers::OpenOcdConfig &config) {
+  std::expected<providers::OpenOcdProvider, std::string> result = providers::OpenOcdProvider::Create(config);
+  if (!result)
+    return llvm::make_error<dap::DAPError>(result.error());
+  openocd_provider_ = std::move(*result);
+  return llvm::Error::success();
+}
+
+void DebugContext::ShutdownOpenOcd() { openocd_provider_.reset(); }
+
+llvm::Error DebugContext::CreateTrace() {
+  std::expected<std::unique_ptr<TraceManager>, std::string> result = TraceManager::Create(*this);
+  if (!result)
+    return llvm::make_error<dap::DAPError>(result.error());
+  trace_manager_ = std::move(*result);
+  return llvm::Error::success();
+}
+
+void DebugContext::ShutdownTrace() { trace_manager_.reset(); }
 
 void DebugContext::RunStopCommands() { target_manager_->RunStopCommands(); }
 void DebugContext::RunExitCommands() { target_manager_->RunExitCommands(); }

@@ -23,7 +23,7 @@ bool Transport::ReadHeaderLine(std::string &line) {
         const size_t crlf_pos = read_buffer_.find("\r\n", read_pos_);
         if (crlf_pos != std::string::npos) {
             line.assign(read_buffer_, read_pos_, crlf_pos - read_pos_);
-            read_pos_ = crlf_pos + 1;
+            read_pos_ = crlf_pos + 2;
             return true;
         }
 

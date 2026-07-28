@@ -452,6 +452,8 @@ static llvm::StringLiteral ToString(AdapterFeature feature) {
     return "supportTerminateDebuggee";
   case eAdapterFeatureSupportsModuleSymbolsRequest:
     return "supportsModuleSymbolsRequest";
+  case eAdapterFeatureSupportsTraceRequests:
+    return "supportsTraceRequests";
   }
   llvm_unreachable("unhandled adapter feature.");
 }
@@ -525,6 +527,7 @@ bool fromJSON(const llvm::json::Value &Params, AdapterFeature &feature,
           .Case("supportTerminateDebuggee", eAdapterFeatureTerminateDebuggee)
           .Case("supportsModuleSymbolsRequest",
                 eAdapterFeatureSupportsModuleSymbolsRequest)
+          .Case("supportsTraceRequests", eAdapterFeatureSupportsTraceRequests)
           .Default(std::nullopt);
 
   if (!parsedFeature) {

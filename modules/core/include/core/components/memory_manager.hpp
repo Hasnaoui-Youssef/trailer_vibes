@@ -74,9 +74,7 @@ public:
       : m_lldb_provider(lldb_provider),
         m_strategy(std::make_unique<ProcessMemoryStrategy>(lldb_provider)) {}
 
-  MemoryManager(providers::LldbProvider &lldb_provider, providers::OpenOcdProvider &openocd_provider)
-      : m_lldb_provider(lldb_provider),
-        m_strategy(std::make_unique<OpenOcdMemoryStrategy>(openocd_provider)) {}
+  void SetStrategy(std::unique_ptr<MemoryAccessStrategy> strategy) { m_strategy = std::move(strategy); }
 
   llvm::Expected<MemoryReadResult>
   ReadMemory(lldb::addr_t address, uint64_t count, const providers::MemorySelector &selector = {});

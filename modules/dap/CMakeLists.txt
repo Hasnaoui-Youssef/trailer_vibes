@@ -122,6 +122,10 @@ add_library(dap_handlers
         src/handlers/symbols/source_request_handler.cc
         src/handlers/symbols/locations_request_handler.cc
 
+        src/handlers/trace/trace_enable_request_handler.cc
+        src/handlers/trace/trace_disable_request_handler.cc
+        src/handlers/trace/trace_status_request_handler.cc
+
         src/handlers/unknown_request_handler.cc
 )
 

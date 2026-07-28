@@ -23,7 +23,6 @@
 #include "dap/protocol/protocol_types.hpp"
 #include "dap/protocol/dap_defines.hpp"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/JSON.h"
 #include <chrono>
 #include <cstdint>
@@ -116,30 +115,26 @@ struct Configuration {
   std::string platformName;
 };
 
-enum Console : unsigned {
-  eConsoleInternal,
-  eConsoleIntegratedTerminal,
-  eConsoleExternalTerminal
+struct OpenOcdConfiguration {
+  std::vector<std::string> scriptSearchDirs;
+  std::vector<std::string> configFiles;
+  std::vector<std::string> rawCommands;
+  std::string logFile = "openocd_logs.txt";
+  int32_t debugLevel = 2;
+  std::string gdbPort = "3333";
+  std::string tclPort = "disabled";
+  std::string telnetPort = "disabled";
 };
+bool fromJSON(const llvm::json::Value &, OpenOcdConfiguration &,
+              llvm::json::Path);
 
 struct LaunchRequestArguments {
   Configuration configuration;
   bool noDebug = false;
 
   std::vector<std::string> launchCommands;
-  std::string cwd;
 
-  std::vector<std::string> args;
-
-  llvm::StringMap<std::string> env;
-
-  bool detachOnError = false;
-  bool disableASLR = true;
-  bool disableSTDIO = false; // This will be supported once we capture ITM trace from openocd
-  bool shellExpandArguments = false;
-  Console console = eConsoleInternal;
-  std::vector<std::optional<std::string>> stdio;
-
+  OpenOcdConfiguration openocd;
 };
 bool fromJSON(const llvm::json::Value &, LaunchRequestArguments &,
               llvm::json::Path);
@@ -165,15 +160,6 @@ struct AttachRequestArguments {
   std::string gdbRemoteHostname = "localhost";
   std::string coreFile;
   std::optional<DAPSession> session;
-
-  // Feeds providers::OpenOcdConfig once the engine owns starting OpenOCD
-  // itself; today the TypeScript extension still spawns it and only
-  // gdbRemotePort/gdbRemoteHostname above are ever populated.
-  std::vector<std::string> openocdScriptSearchDirs;
-  std::vector<std::string> openocdConfigFiles;
-  std::vector<std::string> openocdRawCommands;
-  std::string openocdLogFile = "openocd_logs.txt";
-  int32_t openocdDebugLevel = 2;
 };
 bool fromJSON(const llvm::json::Value &, AttachRequestArguments &,
               llvm::json::Path);
@@ -648,9 +634,17 @@ struct StackTraceResponseBody {
 };
 llvm::json::Value toJSON(const StackTraceResponseBody &);
 
+using TraceEnableArguments = EmptyArguments;
+using TraceDisableArguments = EmptyArguments;
+using TraceStatusArguments = EmptyArguments;
+
+struct TraceStatusResponseBody {
+    bool enabled = false;
+};
+llvm::json::Value toJSON(const TraceStatusResponseBody &);
+
 using UnknownArguments = EmptyArguments;
 using UnknownResponseBody = VoidResponse;
-
 } // namespace dap::protocol
 
 #endif  // TRAILER_DAP_PROTOCOL_PROTOCOL_REQUESTS_HPP_

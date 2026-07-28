@@ -68,13 +68,6 @@ protected:
   /// debug session.
   void PrintIntroductionMessage() const;
 
-  // Takes a LaunchRequest object and launches the process, also handling
-  // runInTerminal if applicable. It doesn't do any of the additional
-  // initialization and bookkeeping stuff that is needed for `request_launch`.
-  // This way we can reuse the process launching logic for RestartRequest too.
-  llvm::Error
-  LaunchProcess(const protocol::LaunchRequestArguments &request) const;
-
   // Check if the step-granularity is `instruction`.
   bool HasInstructionGranularity(const llvm::json::Object &request) const;
 
@@ -595,6 +588,45 @@ public:
   }
   llvm::Expected<protocol::ModuleSymbolsResponseBody>
   Run(const protocol::ModuleSymbolsArguments &args) const override;
+};
+
+class TraceEnableRequestHandler
+    : public RequestHandler<protocol::TraceEnableArguments,
+                             llvm::Expected<protocol::TraceStatusResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerTraceEnable"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsTraceRequests};
+  }
+  llvm::Expected<protocol::TraceStatusResponseBody>
+  Run(const protocol::TraceEnableArguments &args) const override;
+};
+
+class TraceDisableRequestHandler
+    : public RequestHandler<protocol::TraceDisableArguments,
+                             llvm::Expected<protocol::TraceStatusResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerTraceDisable"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsTraceRequests};
+  }
+  llvm::Expected<protocol::TraceStatusResponseBody>
+  Run(const protocol::TraceDisableArguments &args) const override;
+};
+
+class TraceStatusRequestHandler
+    : public RequestHandler<protocol::TraceStatusArguments,
+                             llvm::Expected<protocol::TraceStatusResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerTraceStatus"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsTraceRequests};
+  }
+  llvm::Expected<protocol::TraceStatusResponseBody>
+  Run(const protocol::TraceStatusArguments &args) const override;
 };
 
 class TestGetTargetBreakpointsRequestHandler

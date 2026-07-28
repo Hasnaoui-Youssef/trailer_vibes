@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 #include "command_queue.hpp"
 #include "openocd_jmp.h"
@@ -27,6 +28,11 @@ int LogOutputHandler(struct command_context* context, const char* line) {
     auto* file = static_cast<FILE*>(context->output_handler_priv);
     std::fputs(line, file);
     return ERROR_OK;
+}
+
+void TraceCallbackTrampoline(const uint8_t* data, size_t size, bool is_barrier, void* args) {
+    auto* callback = static_cast<OpenOcdProvider::TraceDataCallback*>(args);
+    (*callback)(std::span(reinterpret_cast<const std::byte*>(data), size), is_barrier);
 }
 
 TmcMode ToTmcMode(enum tmc_mode mode) {
@@ -63,6 +69,7 @@ struct OpenOcdProvider::Impl {
     struct command_context* cmd_ctx = nullptr;
     CommandQueue queue;
     FILE* log_file = nullptr;
+    std::unordered_map<std::string, OpenOcdProvider::TraceDataCallback> trace_callbacks;
 
     ~Impl() {
         if (!cmd_ctx) {
@@ -81,6 +88,11 @@ struct OpenOcdProvider::Impl {
 
         RunGuarded(
             [this]() {
+                for (const auto& [name, callback] : trace_callbacks) {
+                    if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) tmc_clear_capture_callback(tmc);
+                }
+                trace_callbacks.clear();
+
                 server_quit();
                 flash_free_all_banks();
                 gdb_service_free();
@@ -145,9 +157,8 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
             command_set_output_handler(cmd_ctx, &LogOutputHandler, provider.impl_->log_file);
             server_host_os_entry();
 
+            //Can't really avoid this as it's registered for ocd_find fed to "find" TCL commands
             for (const auto& dir : config.script_search_dirs) add_script_search_dir(dir.c_str());
-            for (const auto& raw : config.raw_commands) add_config_command(raw.c_str());
-            for (const auto& file : config.config_files) add_config_command(("script {" + file + "}").c_str());
 
             command_run_linef(cmd_ctx, const_cast<char*>("debug_level %d"), config.debug_level);
             command_run_linef(cmd_ctx, const_cast<char*>("gdb_port %s"), config.gdb_port.c_str());
@@ -156,8 +167,19 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
         },
         &exit_code);
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during configuration");
-
-    ok = RunGuarded([&]() { retval = parse_config_file(cmd_ctx); }, &exit_code);
+    auto commands = RegisterConfigCommands(config);
+    ok = RunGuarded([&]() {
+        if(commands.empty()) {
+            command_run_line(cmd_ctx, const_cast<char*>("script openocd.cfg"));
+            retval = ERROR_OK;
+            return;
+        }
+        for(auto& cmd : commands) {
+            retval = command_run_line(cmd_ctx, cmd.data());
+            if (retval != ERROR_OK) return;
+        }
+        retval = ERROR_OK;
+    }, &exit_code);
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") while parsing config files");
     if (retval != ERROR_OK && retval != ERROR_COMMAND_CLOSE_CONNECTION) {
         return std::unexpected("parse_config_file() failed");
@@ -177,6 +199,37 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
     if (!queue_start) return std::unexpected(queue_start.error());
 
     return provider;
+}
+
+
+std::expected<std::string, std::string> OpenOcdProvider::GetCoreName() {
+    std::string name;
+    std::string failure;
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded(
+            [&]() {
+                for (struct target* target = all_targets; target; target = target->next) {
+                    if (std::strcmp(target_type_name(target), "mem_ap") == 0) continue;
+                    struct cortex_m_common* cm = target_to_cortex_m_safe(target);
+                    if (!cm) {
+                        failure = "target '" + std::string(target_name(target)) + "' is not a Cortex-M core";
+                        return;
+                    }
+                    if (!cm->core_info) {
+                        failure = "target '" + std::string(target_name(target)) + "' has not been examined yet";
+                        return;
+                    }
+                    name = cm->core_info->name;
+                    return;
+                }
+                failure = "no non-AP target found";
+            },
+            &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during GetCoreName");
+    if (!failure.empty()) return std::unexpected(failure);
+    return name;
 }
 
 std::expected<std::vector<std::byte>, std::string> OpenOcdProvider::ReadMemory(const MemorySelector& selector,
@@ -298,6 +351,88 @@ std::expected<std::vector<Etmv4Object>, std::string> OpenOcdProvider::ListTraceS
     return result;
 }
 
+std::expected<model::Etmv4Registers, std::string> OpenOcdProvider::ReadETMv4Registers(const std::string& name) {
+    model::Etmv4Registers regs{};
+    std::string failure;
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded([&]() {
+                struct etmv4_object* obj = etmv4_find_by_name(name.c_str());
+                if (!obj) {
+                    failure = "no ETMv4 object named '" + name + "'";
+                    return;
+                }
+                if (!etmv4_object_initialised(obj)) {
+                    failure = "ETMv4 object '" + name + "' is not initialised";
+                    return;
+                }
+                etmv4_decode_regs d_regs = etmv4_object_decode_regs(obj);
+                regs.trcconfigr = d_regs.trcconfigr;
+                regs.trctraceidr = d_regs.trctraceidr;
+                regs.trcidr0 = d_regs.trcidr0;
+                regs.trcidr1 = d_regs.trcidr1;
+                regs.trcidr2 = d_regs.trcidr2;
+                regs.trcidr8 = d_regs.trcidr8;
+                regs.trcidr9 = d_regs.trcidr9;
+                regs.trcidr10 = d_regs.trcidr10;
+                regs.trcidr11 = d_regs.trcidr11;
+                regs.trcidr12 = d_regs.trcidr12;
+                regs.trcidr13 = d_regs.trcidr13;
+                regs.trcidr3 = d_regs.trcidr3;
+                regs.trcidr4 = d_regs.trcidr4;
+                regs.trcidr5 = d_regs.trcidr5;
+                regs.trcidr6 = d_regs.trcidr6;
+                regs.trcidr7 = d_regs.trcidr7;
+                regs.trcauthstatus = d_regs.trcauthstatus;
+        },
+        &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ReadETMv4Registers");
+    if (!failure.empty()) return std::unexpected(failure);
+    return regs;
+}
+
+std::expected<void, std::string> OpenOcdProvider::SubscribeTrace(const std::string& name, TraceDataCallback callback) {
+    std::string failure;
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded([&]() {
+                struct tmc_object* obj = tmc_find_by_name(name.c_str());
+                if (!obj) {
+                    failure = "no TMC object named '" + name + "'";
+                    return;
+                }
+                auto [it, inserted] = impl_->trace_callbacks.insert_or_assign(name, std::move(callback));
+                tmc_set_capture_callback(obj, &TraceCallbackTrampoline, &it->second);
+        },
+        &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during SubscribeTrace");
+    if (!failure.empty()) return std::unexpected(failure);
+    return {};
+}
+
+std::expected<void, std::string> OpenOcdProvider::UnsubscribeTrace(const std::string& name) {
+    std::string failure;
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded([&]() {
+                struct tmc_object* obj = tmc_find_by_name(name.c_str());
+                if (!obj) {
+                    failure = "no TMC object named '" + name + "'";
+                    return;
+                }
+                tmc_clear_capture_callback(obj);
+                impl_->trace_callbacks.erase(name);
+        },
+        &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during UnsubscribeTrace");
+    if (!failure.empty()) return std::unexpected(failure);
+    return {};
+}
+
+
 std::expected<void, std::string> OpenOcdProvider::ConfigureTrace(const std::string& name, const std::string& options) {
     struct command_context* cmd_ctx = impl_->cmd_ctx;
     int exit_code = 0;
@@ -363,35 +498,6 @@ std::expected<void, std::string> OpenOcdProvider::DisableTrace(const std::string
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during DisableTrace");
     if (!found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
     return {};
-}
-
-std::expected<std::vector<std::byte>, std::string> OpenOcdProvider::ExtractTrace(const std::string& name) {
-    int exit_code = 0;
-    int retval = ERROR_FAIL;
-    bool found = false;
-    std::vector<std::byte> data;
-
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
-            [&]() {
-                struct tmc_object* tmc = tmc_find_by_name(name.c_str());
-                if (!tmc) return;
-                found = true;
-                retval = tmc_extract_data(tmc);
-                if (retval != ERROR_OK || !tmc->file) return;
-                std::rewind(tmc->file);
-                std::byte buf[4096];
-                size_t n;
-                while ((n = std::fread(buf, 1, sizeof(buf), tmc->file)) > 0) {
-                    data.insert(data.end(), buf, buf + n);
-                }
-            },
-            &exit_code);
-    });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ExtractTrace");
-    if (!found) return std::unexpected("no TMC object named '" + name + "'");
-    if (retval != ERROR_OK) return std::unexpected("tmc_extract_data() failed");
-    return data;
 }
 
 }  // namespace providers

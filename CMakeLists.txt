@@ -66,29 +66,6 @@ add_subdirectory(modules/providers)
 add_subdirectory(modules/dap)
 add_subdirectory(modules/core)
 
-add_executable(trailer
-        src/main.cc
-)
-
-# RTTI boundary: see modules/disassembler/CMakeLists.txt.
-target_link_libraries(trailer
-    PRIVATE
-    OpenCSD::opencsd
-    snapshot_parser
-    trace_sink
-    trace_decoder
-    trace_model
-    disassembler
-    trace_transform
-)
-
-target_compile_definitions(trailer PRIVATE
-    TRAILER_SAMPLE_ELF_PATH="${CMAKE_SOURCE_DIR}/test_resources/firmware.elf"
-    TRAILER_SAMPLE_TRACE_DUMP_PATH="${CMAKE_SOURCE_DIR}/test_resources/etm_dump.bin"
-)
-
-target_compile_features(trailer PRIVATE cxx_std_23)
-
 add_executable(trailer-dap
         src/dap_main.cc
 )

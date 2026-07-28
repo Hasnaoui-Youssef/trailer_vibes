@@ -28,6 +28,7 @@ add_library(core
         src/components/data_manager.cc
         src/components/execution_controller.cc
         src/components/target_manager.cc
+        src/components/trace_manager.cc
 )
 
 target_include_directories(core PUBLIC
@@ -38,6 +39,8 @@ target_link_libraries(core PUBLIC
     lldb_provider
     openocd_provider
     dap_protocol
+    disassembler
+    trace_provider
 )
 
 target_compile_options(core PUBLIC

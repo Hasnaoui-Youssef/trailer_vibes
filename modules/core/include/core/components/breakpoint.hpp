@@ -25,6 +25,11 @@ public:
 protected:
   /// The LLDB breakpoint associated wit this source breakpoint.
   lldb::SBBreakpoint m_bp;
+
+  /// Set if SetBreakpoint() failed to make m_bp a hardware breakpoint (e.g.
+  /// no free FPB comparators). Not necessarily fatal - only matters if the
+  /// address turns out to be in flash, which isn't known here yet.
+  std::string m_hardware_error;
 };
 
 }  // namespace core

@@ -1,7 +1,7 @@
-#include "openocd_runtime.hpp"
-
+#include <format>
 #include <cstring>
 
+#include "openocd_runtime.hpp"
 #include "openocd_version.h"
 
 extern "C" {
@@ -163,6 +163,18 @@ struct command_context* CreateCommandContext() {
 
     global_cmd_ctx = cmd_ctx;
     return cmd_ctx;
+}
+
+std::vector<std::string> RegisterConfigCommands(const OpenOcdConfig& config) {
+    std::vector<std::string> commands{};
+    commands.reserve(config.config_files.size() + config.raw_commands.size());
+    for (const auto& cfg : config.config_files) {
+        commands.push_back(std::format("script {}", cfg));
+    }
+    for (const auto& cmd : config.raw_commands) {
+        commands.push_back(cmd);
+    }
+    return commands;
 }
 
 int RunInit(struct command_context* cmd_ctx) { return RunInitSequence(cmd_ctx); }

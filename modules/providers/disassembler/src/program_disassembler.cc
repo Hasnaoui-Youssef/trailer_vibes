@@ -230,7 +230,10 @@ void SplitMnemonicOperands(const std::string &text, std::string &mnemonic, std::
 }
 
 llvm::DILineInfoSpecifier MakeLineInfoSpecifier() {
-    return llvm::DILineInfoSpecifier(llvm::DILineInfoSpecifier::FileLineInfoKind::RawValue,
+    // AbsoluteFilePath (not RawValue) because `InlineFrame::file` is handed
+    // to DAP clients as a directly-openable path (see trailerTraceData) -
+    // DWARF line tables otherwise store just the bare file name.
+    return llvm::DILineInfoSpecifier(llvm::DILineInfoSpecifier::FileLineInfoKind::AbsoluteFilePath,
                                       llvm::DILineInfoSpecifier::FunctionNameKind::ShortName);
 }
 

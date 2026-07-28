@@ -54,6 +54,9 @@ std::vector<std::unique_ptr<BaseRequestHandler>> RegisterDebugHandlers(Orchestra
     Register<StepInTargetsRequestHandler>(orchestrator, context, handlers);
     Register<StepOutRequestHandler>(orchestrator, context, handlers);
     Register<TestGetTargetBreakpointsRequestHandler>(orchestrator, context, handlers);
+    Register<TraceEnableRequestHandler>(orchestrator, context, handlers);
+    Register<TraceDisableRequestHandler>(orchestrator, context, handlers);
+    Register<TraceStatusRequestHandler>(orchestrator, context, handlers);
     Register<VariablesRequestHandler>(orchestrator, context, handlers);
     Register<WriteMemoryRequestHandler>(orchestrator, context, handlers);
 

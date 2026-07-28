@@ -1,0 +1,5 @@
+add_subdirectory(trace_model)
+add_subdirectory(trace_sink)
+add_subdirectory(trace_decoder)
+add_subdirectory(trace_transform)
+add_subdirectory(trace_provider)

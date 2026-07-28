@@ -13,10 +13,12 @@
 #define TRAILER_CORE_COMPONENTS_DISASSEMBLY_MANAGER_HPP_
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
+#include "disassembler/program_disassembler.hpp"
 #include "lldb/lldb-types.h"
 #include "llvm/Support/Error.h"
 
@@ -37,8 +39,16 @@ public:
   llvm::Expected<dap::protocol::SourceResponseBody> GetSourceRequest(
       const dap::protocol::SourceArguments &args);
 
+  // Lazily loads and precomputes disassembler::ProgramDisassembler for the
+  // session's program, caching it - the whole-image LLVM/DWARF precompute
+  // must happen once per session, not once per caller.
+  llvm::Expected<const disasm::ProgramDisassembler &> Program();
+  void InvalidateProgram();
+
 private:
   DebugContext &m_context;
+  std::optional<disasm::ProgramDisassembler> program_;
+  std::string program_path_;
 };
 
 }  // namespace core

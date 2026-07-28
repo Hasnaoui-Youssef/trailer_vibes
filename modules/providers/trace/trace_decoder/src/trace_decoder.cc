@@ -5,14 +5,12 @@
 #include <iostream>
 #include <memory>
 #include <span>
-#include <utility>
 
 #include <opencsd.h>
 
 #include "trace_sink/trace_record_sink.hpp"
 
 namespace decode {
-
 namespace {
 
 // Frees a DecodeTree created via DecodeTree::CreateDecodeTree. Private to
@@ -27,26 +25,26 @@ struct DecodeTreeDeleter {
 };
 using DecodeTreePtr = std::unique_ptr<DecodeTree, DecodeTreeDeleter>;
 
-ocsd_dcd_tree_src_t ToSourceFormat(TraceSourceFormat format) {
+ocsd_dcd_tree_src_t ToSourceFormat(model::TraceSourceFormat format) {
     switch (format) {
-        case TraceSourceFormat::kSingle:
+        case model::TraceSourceFormat::kSingle:
             return OCSD_TRC_SRC_SINGLE;
-        case TraceSourceFormat::kFrameFormatted:
+        case model::TraceSourceFormat::kFrameFormatted:
             return OCSD_TRC_SRC_FRAME_FORMATTED;
     }
     return OCSD_TRC_SRC_FRAME_FORMATTED;
 }
 
-uint32_t ToFormatterFlags(const DeformatterConfig &deformatter) {
+uint32_t ToFormatterFlags(const model::DeformatterConfig &deformatter) {
     uint32_t flags = 0;
     switch (deformatter.frame_sync) {
-        case FrameSyncMode::kFsync:
+        case model::FrameSyncMode::kFsync:
             flags |= OCSD_DFRMTR_HAS_FSYNCS;
             break;
-        case FrameSyncMode::kHsync:
+        case model::FrameSyncMode::kHsync:
             flags |= OCSD_DFRMTR_HAS_HSYNCS;
             break;
-        case FrameSyncMode::kMemAligned:
+        case model::FrameSyncMode::kMemAligned:
             flags |= OCSD_DFRMTR_FRAME_MEM_ALIGN;
             break;
     }
@@ -56,7 +54,7 @@ uint32_t ToFormatterFlags(const DeformatterConfig &deformatter) {
     return flags;
 }
 
-ocsd_etmv4_cfg ToEtmv4Config(const Etmv4Registers &regs, ocsd_arch_version_t arch_ver,
+ocsd_etmv4_cfg ToEtmv4Config(const model::Etmv4Registers &regs, ocsd_arch_version_t arch_ver,
                               ocsd_core_profile_t core_prof) {
     ocsd_etmv4_cfg cfg{};
     cfg.reg_configr = regs.trcconfigr;
@@ -77,20 +75,6 @@ ocsd_etmv4_cfg ToEtmv4Config(const Etmv4Registers &regs, ocsd_arch_version_t arc
 
 std::string MakeError(std::string_view message) { return std::string("trace_decoder: ").append(message); }
 
-// Registers `segments` as file-backed opcode memory for `tree`, reading
-// bytes from `image_path` (the same ELF disasm::ProgramDisassembler loaded
-// them from). Mirrors snapshot_parser's CreateDcdTreeFromSnapShot::
-// processDumpfiles, just driven by PT_LOAD segments instead of Arm
-// Debug/Trace snapshot dump-file entries.
-//
-// A firmware image typically has more than one PT_LOAD segment (e.g. one
-// for .text, another for .data's flash-resident initial values), and
-// OpenCSD only allows *one* accessor to be created per file path: the
-// first region for a given file must go through addBinFileRegionMemAcc,
-// every subsequent region for that same file through
-// updateBinFileRegionMemAcc, or the add call fails outright. Hence the
-// isExistingFileAccessor check on every iteration, exactly as
-// processDumpfiles does.
 ocsd_err_t RegisterMemoryImage(DecodeTree &tree, std::span<const model::LoadSegment> segments,
                                const std::string &image_path) {
     for (const model::LoadSegment &segment : segments) {
@@ -109,9 +93,6 @@ ocsd_err_t RegisterMemoryImage(DecodeTree &tree, std::span<const model::LoadSegm
     return OCSD_OK;
 }
 
-// Feeds `data` through `tree` in fixed-size chunks (mirrors OpenCSD's own
-// mem_buff_demo sample), then signals end-of-trace so buffered elements
-// flush out. Returns the final datapath response.
 ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, std::span<const uint8_t> data) {
     constexpr uint32_t kChunkSize = 4096;
 
@@ -143,7 +124,7 @@ ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, std::span<const uint8_t> da
 }  // namespace
 
 std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode(
-    const InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments) const {
+    const model::InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments) const {
     CoreArchProfileMap arch_profiles;
     const ocsd_arch_profile_t arch_profile = arch_profiles.getArchProfile(config.core_name());
     if (arch_profile.arch == ARCH_UNKNOWN) {

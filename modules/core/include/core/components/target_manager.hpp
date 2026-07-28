@@ -1,14 +1,13 @@
 #ifndef TRAILER_CORE_COMPONENTS_TARGET_MANAGER_HPP_
 #define TRAILER_CORE_COMPONENTS_TARGET_MANAGER_HPP_
 
+#include <chrono>
 #include <optional>
 #include <string>
 
 #include "dap/protocol/protocol_requests.hpp"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBTarget.h"
-#include "lldb/lldb-defines.h"
-#include "lldb/lldb-types.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -31,8 +30,6 @@ public:
 
   bool is_attach = false;
 
-  lldb::pid_t restarting_process_id = LLDB_INVALID_PROCESS_ID;
-
   bool no_lldbinit = false;
   bool source_init_file = true;
 
@@ -45,7 +42,7 @@ public:
   llvm::Error Disconnect();
   llvm::Error Disconnect(bool terminate_debuggee);
 
-  llvm::Error LaunchProcess(const dap::protocol::LaunchRequestArguments &arguments);
+  llvm::Error ConnectToGdbRemote(llvm::StringRef hostname, llvm::StringRef port, std::chrono::seconds timeout);
 
   llvm::Error Attach(const dap::protocol::AttachRequestArguments &arguments);
 
@@ -57,7 +54,6 @@ public:
 
   bool RunLLDBCommands(llvm::StringRef prefix, llvm::ArrayRef<std::string> commands);
   llvm::Error RunAttachCommands(llvm::ArrayRef<std::string> attach_commands);
-  llvm::Error RunLaunchCommands(llvm::ArrayRef<std::string> launch_commands);
   llvm::Error RunPreInitCommands();
   llvm::Error RunInitCommands();
   llvm::Error RunPreRunCommands();

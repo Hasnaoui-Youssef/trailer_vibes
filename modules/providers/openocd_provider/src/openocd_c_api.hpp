@@ -22,6 +22,7 @@ extern "C" {
 #include <target/arm_tpiu_swo.h>
 #include <target/arm_tmc.h>
 #include <target/arm_etmv4.h>
+#include <target/cortex_m.h>
 
 #include <flash/nor/core.h>
 #include <flash/nand/core.h>
