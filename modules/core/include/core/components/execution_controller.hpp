@@ -21,6 +21,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include "openocd_provider/openocd_provider.hpp"
+#include <atomic>
 #include <vector>
 
 namespace core {
@@ -57,6 +59,9 @@ public:
   bool configuration_done = false;
   bool waiting_for_run_in_terminal = false;
 
+  std::atomic<bool> reset_pending_stop{false};
+  std::atomic<bool> reset_resume_after_stop{false};
+
   std::vector<dap::protocol::Thread> initial_thread_list;
 
   void StartEventThread();
@@ -90,6 +95,9 @@ public:
                             lldb::tid_t tid = LLDB_INVALID_THREAD_ID);
   void SendMemoryEvent(lldb::SBValue variable);
   void SendStdOutStdErr(lldb::SBProcess &process);
+
+  // Runs on OpenOCD's server thread - must not touch the LLDB SB API.
+  void OnOpenOcdTargetState(const providers::OpenOcdProvider::TargetStateChange &change);
 
 private:
   void SendThreadExitedEvent(lldb::tid_t tid);

@@ -191,6 +191,8 @@ llvm::Error ExecutionController::ConfigurationDone() {
         "any debugger command scripts are not resuming the process during the "
         "launch sequence.");
 
+  configuration_done = true;
+
   // Waiting until 'configurationDone' to send target based capabilities in case
   // the launch or attach scripts adjust the target. The initial dummy target
   // may have different capabilities than the final target.
@@ -713,6 +715,30 @@ void ExecutionController::SendMemoryEvent(lldb::SBValue variable) {
   m_context.Emit(MemoryEvent{std::move(body)});
 }
 
+void ExecutionController::OnOpenOcdTargetState(const providers::OpenOcdProvider::TargetStateChange &change) {
+  using TargetStateEvent = providers::OpenOcdProvider::TargetStateEvent;
+  llvm::StringRef event_name;
+  switch (change.event) {
+  case TargetStateEvent::kHalted:
+    event_name = "halted";
+    break;
+  case TargetStateEvent::kResumed:
+    event_name = "resumed";
+    break;
+  case TargetStateEvent::kResetStart:
+    event_name = "reset-start";
+    break;
+  case TargetStateEvent::kResetEnd:
+    event_name = "reset-end";
+    break;
+  case TargetStateEvent::kExamineEnd:
+    event_name = "examine-end";
+    break;
+  }
+  m_context.LogDiagnostic(
+      llvm::formatv("openocd target '{0}': {1} (halted={2})", change.target_name, event_name, change.halted).str());
+}
+
 // Event handler functions called by EventThreadMain. Adapted from
 // upstream: there, these look up "which DAP session owns this event" via
 // DAPSessionManager::FindDAP(...), because lldb-dap supports multiple
@@ -741,7 +767,18 @@ void ExecutionController::HandleProcessEvent(const lldb::SBEvent &event, bool &p
       // restarted.
       if (!lldb::SBProcess::GetRestartedFromEvent(event)) {
         SendStdOutStdErr(process);
-        if (llvm::Error err = SendThreadStoppedEvent())
+        const bool reset_stop = reset_pending_stop.exchange(false);
+        if (reset_stop) {
+          m_context.Emit(ResetEvent{ResetPhase::Complete});
+          if (reset_resume_after_stop.exchange(false)) {
+            WillContinue();
+            SendContinuedEvent();
+            (void)process.Continue();
+            break;
+          }
+          SendInvalidatedEvent({protocol::InvalidatedEventBody::eAreaAll});
+        }
+        if (llvm::Error err = SendThreadStoppedEvent(/*on_entry=*/reset_stop))
           m_context.LogDiagnostic(
               llvm::formatv("({1}) reporting thread stopped: {0}", llvm::toString(std::move(err)),
                             m_context.ClientName())
@@ -751,7 +788,8 @@ void ExecutionController::HandleProcessEvent(const lldb::SBEvent &event, bool &p
     case lldb::eStateRunning:
     case lldb::eStateStepping:
       WillContinue();
-      SendContinuedEvent();
+      if (!reset_pending_stop.load())
+        SendContinuedEvent();
       break;
     case lldb::eStateExited: {
       lldb::SBStream stream;

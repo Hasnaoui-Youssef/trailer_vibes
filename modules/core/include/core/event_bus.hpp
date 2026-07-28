@@ -76,9 +76,15 @@ struct TraceDataEvent {
   std::vector<model::TraceGap> gaps;
 };
 
+enum class ResetPhase { Started, Complete };
+
+struct ResetEvent {
+  ResetPhase phase;
+};
+
 using DomainEvent = std::variant<OutputEvent, StoppedEvent, ContinuedEvent, ExitedEvent, ThreadExitedEvent,
                                  ProcessEvent, CapabilitiesEvent, InvalidatedEvent, MemoryEvent, ModuleEvent,
-                                 BreakpointEvent, TerminatedEvent, TraceDataEvent>;
+                                 BreakpointEvent, TerminatedEvent, TraceDataEvent, ResetEvent>;
 
 class EventBus {
 public:

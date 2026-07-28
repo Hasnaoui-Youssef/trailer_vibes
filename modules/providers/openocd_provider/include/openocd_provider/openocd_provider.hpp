@@ -53,6 +53,19 @@ class OpenOcdProvider {
     // options is a literal Tcl 'configure' argument list
     std::expected<void, std::string> ConfigureTrace(const std::string& name, const std::string& options);
 
+    enum class TargetStateEvent { kHalted, kResumed, kResetStart, kResetEnd, kExamineEnd };
+    struct TargetStateChange {
+        std::string target_name;
+        TargetStateEvent event;
+        bool halted;
+    };
+
+    using TargetStateCallback = std::function<void(const TargetStateChange&)>;
+    // `callback` runs on OpenOCD's server thread, inside target_call_event_callbacks -
+    // it must not call into LLDB, only record state or hand off to another thread.
+    std::expected<void, std::string> SubscribeTargetState(TargetStateCallback callback);
+    std::expected<void, std::string> UnsubscribeTargetState();
+
  private:
     OpenOcdProvider();
 

@@ -41,6 +41,12 @@ llvm::Error DebugContext::CreateOpenOcd(const providers::OpenOcdConfig &config) 
   if (!result)
     return llvm::make_error<dap::DAPError>(result.error());
   openocd_provider_ = std::move(*result);
+  if (std::expected<void, std::string> subscribed = openocd_provider_->SubscribeTargetState(
+          [this](const providers::OpenOcdProvider::TargetStateChange &change) {
+            Execution().OnOpenOcdTargetState(change);
+          });
+      !subscribed)
+    LogDiagnostic("failed to subscribe to openocd target state: " + subscribed.error());
   return llvm::Error::success();
 }
 

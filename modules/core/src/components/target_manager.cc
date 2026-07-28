@@ -14,6 +14,7 @@
 #include "lldb/API/SBAttachInfo.h"
 #include "lldb/API/SBCommandInterpreter.h"
 #include "lldb/API/SBCommandReturnObject.h"
+#include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBFile.h"
 #include "lldb/API/SBListener.h"
 #include "lldb/API/SBMutex.h"
@@ -383,10 +384,6 @@ llvm::Error TargetManager::Restart(const std::optional<dap::protocol::RestartArg
   if (!m_context.Target().GetProcess().IsValid())
     return llvm::make_error<dap::DAPError>("Restart request received but no process was launched.");
 
-  // Restart is only meaningful for an OpenOCD-backed launch session: it
-  // resets the target in place through the already-connected provider,
-  // rather than killing and relaunching a process the way a native LLDB
-  // launch would.
   if (!m_context.OpenOcd())
     return llvm::make_error<dap::DAPError>("Restart is only supported for launch sessions.");
 
@@ -396,34 +393,47 @@ llvm::Error TargetManager::Restart(const std::optional<dap::protocol::RestartArg
     if (const auto *launch_arguments =
             std::get_if<dap::protocol::LaunchRequestArguments>(&arguments->arguments)) {
       last_launch_request = *launch_arguments;
-      // Update the configuration based on the latest copy of the launch
-      // arguments.
       SetConfiguration(launch_arguments->configuration, /*is_attach=*/false);
       ConfigureSourceMaps();
     }
   }
 
-  // Clear the list of thread ids to avoid sending "thread exited" events for
-  // threads of the target being reset.
-  m_context.Execution().thread_ids.clear();
+  lldb::SBProcess process = m_context.Target().GetProcess();
+  const bool was_running = !lldb::SBDebugger::StateIsStoppedState(process.GetState());
 
-  if (std::expected<void, std::string> result = m_context.OpenOcd()->RunTclCommand("reset halt"); !result)
+  m_context.Emit(ResetEvent{ResetPhase::Started});
+  m_context.Execution().SendContinuedEvent();
+  m_context.Execution().thread_ids.clear();
+  m_context.Execution().reset_pending_stop = true;
+  m_context.Execution().reset_resume_after_stop = !m_context.Execution().stop_at_entry;
+
+  m_context.ShutdownTrace();
+
+  if (std::expected<void, std::string> result = m_context.OpenOcd()->RunTclCommand("reset halt"); !result) {
+    m_context.Execution().reset_pending_stop = false;
+    m_context.Execution().reset_resume_after_stop = false;
     return llvm::make_error<dap::DAPError>(result.error());
+  }
 
   m_context.Disassembly().InvalidateProgram();
-  m_context.ShutdownTrace();
   if (llvm::Error err = m_context.CreateTrace())
     m_context.SendOutput(OutputCategory::Console, "trace unavailable: " + llvm::toString(std::move(err)));
 
-  m_context.Execution().SendProcessEvent(core::Launch);
+  // A halt while already running produces a genuine stop reply on its own
+  // (frontend_state was TARGET_RUNNING) - no resync needed.
+  if (was_running)
+    return llvm::Error::success();
 
-  // This is normally done after receiving a "configuration done" request.
-  // Because we're restarting, configuration has already happened so we can
-  // continue the process right away.
-  if (m_context.Execution().stop_at_entry)
-    return m_context.Execution().SendThreadStoppedEvent(/*on_entry=*/true);
+  if (std::expected<void, std::string> result = m_context.OpenOcd()->RunTclCommand("gdb_resync"); !result) {
+    m_context.Execution().reset_pending_stop = false;
+    m_context.Execution().reset_resume_after_stop = false;
+    return llvm::make_error<dap::DAPError>(result.error());
+  }
 
-  return ToError(m_context.Target().GetProcess().Continue());
+  lldb::SBThread thread = process.GetThreadAtIndex(0);
+  lldb::SBError step_error;
+  thread.StepInstruction(/*step_over=*/false, step_error);
+  return ToError(step_error);
 }
 
 void TargetManager::SendTerminatedEvent() {

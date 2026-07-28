@@ -35,6 +35,31 @@ void TraceCallbackTrampoline(const uint8_t* data, size_t size, bool is_barrier, 
     (*callback)(std::span(reinterpret_cast<const std::byte*>(data), size), is_barrier);
 }
 
+std::optional<OpenOcdProvider::TargetStateEvent> MapTargetEvent(enum target_event event) {
+    switch (event) {
+        case TARGET_EVENT_HALTED:
+            return OpenOcdProvider::TargetStateEvent::kHalted;
+        case TARGET_EVENT_RESUMED:
+            return OpenOcdProvider::TargetStateEvent::kResumed;
+        case TARGET_EVENT_RESET_START:
+            return OpenOcdProvider::TargetStateEvent::kResetStart;
+        case TARGET_EVENT_RESET_END:
+            return OpenOcdProvider::TargetStateEvent::kResetEnd;
+        case TARGET_EVENT_EXAMINE_END:
+            return OpenOcdProvider::TargetStateEvent::kExamineEnd;
+        default:
+            return std::nullopt;
+    }
+}
+
+int TargetStateTrampoline(struct target* target, enum target_event event, void* args) {
+    std::optional<OpenOcdProvider::TargetStateEvent> mapped = MapTargetEvent(event);
+    if (!mapped) return ERROR_OK;
+    auto* callback = static_cast<OpenOcdProvider::TargetStateCallback*>(args);
+    (*callback)(OpenOcdProvider::TargetStateChange{target_name(target), *mapped, target->state == TARGET_HALTED});
+    return ERROR_OK;
+}
+
 TmcMode ToTmcMode(enum tmc_mode mode) {
     switch (mode) {
         case TMC_MODE_SW_FIFO:
@@ -70,6 +95,7 @@ struct OpenOcdProvider::Impl {
     CommandQueue queue;
     FILE* log_file = nullptr;
     std::unordered_map<std::string, OpenOcdProvider::TraceDataCallback> trace_callbacks;
+    OpenOcdProvider::TargetStateCallback target_state_callback;
 
     ~Impl() {
         if (!cmd_ctx) {
@@ -92,6 +118,10 @@ struct OpenOcdProvider::Impl {
                     if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) tmc_clear_capture_callback(tmc);
                 }
                 trace_callbacks.clear();
+                if (target_state_callback) {
+                    target_unregister_event_callback(&TargetStateTrampoline, &target_state_callback);
+                    target_state_callback = nullptr;
+                }
 
                 server_quit();
                 flash_free_all_banks();
@@ -429,6 +459,36 @@ std::expected<void, std::string> OpenOcdProvider::UnsubscribeTrace(const std::st
     });
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during UnsubscribeTrace");
     if (!failure.empty()) return std::unexpected(failure);
+    return {};
+}
+
+std::expected<void, std::string> OpenOcdProvider::SubscribeTargetState(TargetStateCallback callback) {
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded(
+            [&]() {
+                const bool already_registered = static_cast<bool>(impl_->target_state_callback);
+                impl_->target_state_callback = std::move(callback);
+                if (!already_registered)
+                    target_register_event_callback(&TargetStateTrampoline, &impl_->target_state_callback);
+            },
+            &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during SubscribeTargetState");
+    return {};
+}
+
+std::expected<void, std::string> OpenOcdProvider::UnsubscribeTargetState() {
+    int exit_code = 0;
+    bool ok = impl_->queue.RunSync([&]() {
+        return RunGuarded(
+            [&]() {
+                target_unregister_event_callback(&TargetStateTrampoline, &impl_->target_state_callback);
+                impl_->target_state_callback = nullptr;
+            },
+            &exit_code);
+    });
+    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during UnsubscribeTargetState");
     return {};
 }
 

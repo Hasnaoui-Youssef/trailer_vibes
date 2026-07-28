@@ -157,6 +157,11 @@ private:
     void HandleDomainEvent(const core::ModuleEvent &event) { SendTypedEvent("module", event.body); }
     void HandleDomainEvent(const core::BreakpointEvent &event) { SendTypedEvent("breakpoint", event.body); }
 
+    void HandleDomainEvent(const core::ResetEvent &event) {
+        const char *phase = event.phase == core::ResetPhase::Started ? "started" : "complete";
+        orchestrator_.Send(dap::protocol::Event{"trailerReset", llvm::json::Object{{"phase", phase}}});
+    }
+
     void HandleDomainEvent(const core::TraceDataEvent &event) {
         llvm::Expected<const disasm::ProgramDisassembler &> program = context_.Disassembly().Program();
         const disasm::ProgramDisassembler *program_ptr = nullptr;

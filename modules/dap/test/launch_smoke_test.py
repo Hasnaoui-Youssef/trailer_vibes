@@ -239,6 +239,106 @@ def run_trace_checks(client: Client, program_path: str, thread_id: int) -> bool:
     return True
 
 
+def run_restart_checks(client: Client, thread_id: int) -> bool:
+    """Restart from a real breakpoint halt (main.c:106, still armed after
+    run_trace_checks) must land on Reset_Handler with fresh state, not the
+    stale pre-restart frame - the resync fix for issues #3/#4. Repeats twice
+    since the original report was intermittent."""
+    for attempt in (1, 2):
+        print(f"-> stackTrace before restart (attempt {attempt})")
+        client.send("stackTrace", {"threadId": thread_id})
+        resp = client.wait_for_response("stackTrace")
+        frames = (resp.get("body") or {}).get("stackFrames", [])
+        if not resp.get("success") or not frames:
+            print(f"FAILED: pre-restart stackTrace returned no frames: {resp}", file=sys.stderr)
+            return False
+        pre_restart_pc = frames[0].get("instructionPointerReference")
+
+        print("-> restart")
+        watermark = len(client.all_messages)
+        client.send("restart")
+        predicates = {
+            "restart_resp": lambda m: m.get("type") == "response" and m.get("command") == "restart",
+            "continued": lambda m: m.get("type") == "event" and m.get("event") == "continued",
+            "stopped": lambda m: m.get("type") == "event" and m.get("event") == "stopped",
+        }
+        found = client.wait_for_all(predicates, max_messages=60)
+        if "continued" not in found or "stopped" not in found:
+            print(f"FAILED: did not see both 'continued' and 'stopped' after restart: {found}", file=sys.stderr)
+            return False
+        if not found["restart_resp"][1].get("success"):
+            print(f"FAILED: restart did not succeed: {found['restart_resp'][1]}", file=sys.stderr)
+            return False
+        continued_order = found["continued"][0]
+        stopped_order = found["stopped"][0]
+        if continued_order >= stopped_order:
+            print("FAILED: 'continued' did not arrive before 'stopped' on restart", file=sys.stderr)
+            return False
+
+        stopped_body = found["stopped"][1].get("body") or {}
+        if stopped_body.get("reason") != "entry":
+            print(f"FAILED: restart's stopped reason was {stopped_body.get('reason')!r}, expected 'entry'",
+                  file=sys.stderr)
+            return False
+
+        process_events = [
+            m for m in client.all_messages[watermark:] if m.get("type") == "event" and m.get("event") == "process"
+        ]
+        if process_events:
+            print(f"FAILED: restart sent a 'process' event, should not (see SendProcessEvent removal): "
+                  f"{process_events}", file=sys.stderr)
+            return False
+        print("   confirmed: continued -> stopped(entry), no 'process' event")
+
+        restart_thread_id = stopped_body.get("threadId", thread_id)
+        print(f"-> stackTrace after restart (threadId={restart_thread_id})")
+        client.send("stackTrace", {"threadId": restart_thread_id})
+        resp = client.wait_for_response("stackTrace")
+        frames = (resp.get("body") or {}).get("stackFrames", [])
+        if not resp.get("success") or not frames:
+            print(f"FAILED: post-restart stackTrace returned no frames: {resp}", file=sys.stderr)
+            return False
+        top_frame = frames[0]
+        if top_frame.get("name") != "Reset_Handler":
+            print(f"FAILED: post-restart top frame is {top_frame.get('name')!r}, expected 'Reset_Handler'",
+                  file=sys.stderr)
+            return False
+        if top_frame.get("instructionPointerReference") == pre_restart_pc:
+            print("FAILED: post-restart PC is identical to the pre-restart PC - LLDB did not resync",
+                  file=sys.stderr)
+            return False
+        print(f"   confirmed: at Reset_Handler ({top_frame.get('instructionPointerReference')}), "
+              f"pc changed from {pre_restart_pc}")
+
+        print("-> scopes/variables after restart (oracle for stale-state issue #4)")
+        client.send("scopes", {"frameId": top_frame.get("id")})
+        resp = client.wait_for_response("scopes")
+        scopes = (resp.get("body") or {}).get("scopes", [])
+        if not resp.get("success") or not scopes:
+            print(f"FAILED: post-restart scopes returned nothing: {resp}", file=sys.stderr)
+            return False
+        client.send("variables", {"variablesReference": scopes[0].get("variablesReference")})
+        resp = client.wait_for_response("variables")
+        if not resp.get("success"):
+            print(f"FAILED: post-restart variables request failed: {resp}", file=sys.stderr)
+            return False
+        print("   confirmed: scopes/variables resolve against the post-restart frame without error")
+
+        print("-> continue (confirm the breakpoint still hits after restart)")
+        found = continue_and_wait(client, restart_thread_id, want_trace_data=False)
+        if "stopped" not in found:
+            print(f"FAILED: no 'stopped' event after continuing post-restart: {found}", file=sys.stderr)
+            return False
+        if (found["stopped"][1].get("body") or {}).get("reason") != "breakpoint":
+            print(f"FAILED: post-restart continue did not stop with reason 'breakpoint': {found['stopped'][1]}",
+                  file=sys.stderr)
+            return False
+        print("   confirmed: breakpoint still hits after restart")
+        thread_id = restart_thread_id
+
+    return True
+
+
 def main() -> int:
     if len(sys.argv) < 5:
         print(f"usage: {sys.argv[0]} <path-to-trailer-dap> <path-to-firmware.elf> "
@@ -351,6 +451,9 @@ def main() -> int:
 
         if thread_id is not None and ok:
             ok = run_trace_checks(client, program_path, thread_id)
+
+        if thread_id is not None and ok:
+            ok = run_restart_checks(client, thread_id)
 
         print("-> disconnect")
         client.send("disconnect")
