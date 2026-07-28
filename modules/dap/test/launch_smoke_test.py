@@ -111,13 +111,6 @@ def external_openocd_processes() -> list[int]:
 
 def continue_and_wait(client: Client, thread_id: int, want_trace_data: bool, max_messages: int = 60) -> dict:
     """Resumes and waits for the autonomous breakpoint halt to be reported.
-    Used to depend on a 'pause' backstop sent ~300ms after 'continue' because
-    autonomous breakpoint-halt detection was unproven (see
-    KNOWN_ISSUE_AUTONOMOUS_HALT_DETECTION.md, now resolved: the root cause
-    was gdb/lldb defaulting to software breakpoints, which silently have no
-    effect on on-chip flash; tcl/target/stm32h7rx.cfg now forces
-    'gdb_breakpoint_override hard'). The backstop is gone now that the real
-    fix makes the breakpoint actually fire.
 
     Everything of interest - the 'continue' response, 'stopped', and
     (optionally) 'trailerTraceData' - is watched in one read loop via

@@ -7,6 +7,7 @@
 
 #include "core/lldb_utils.hpp"
 #include "lldb/API/SBAddress.h"
+#include "lldb/API/SBBlock.h"
 #include "lldb/API/SBBreakpointLocation.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBFileSpec.h"
@@ -18,6 +19,27 @@
 namespace core {
 
 namespace {
+
+// At an inlined call site, SBAddress::GetLineEntry() resolves to the
+// innermost inlined frame's row instead of the call site's own row.
+struct CallSiteLocation {
+  lldb::SBFileSpec file;
+  uint32_t line = LLDB_INVALID_LINE_NUMBER;
+  uint32_t column = LLDB_INVALID_COLUMN_NUMBER;
+};
+
+CallSiteLocation GetOutermostInlinedCallSite(lldb::SBAddress addr) {
+  CallSiteLocation call_site;
+  lldb::SBBlock inlined_block = addr.GetBlock().GetContainingInlinedBlock();
+  while (inlined_block.IsValid()) {
+    call_site.file = inlined_block.GetInlinedCallSiteFile();
+    call_site.line = inlined_block.GetInlinedCallSiteLine();
+    call_site.column = inlined_block.GetInlinedCallSiteColumn();
+    lldb::SBBlock parent = inlined_block.GetParent();
+    inlined_block = parent.IsValid() ? parent.GetContainingInlinedBlock() : lldb::SBBlock();
+  }
+  return call_site;
+}
 
 std::optional<protocol::PersistenceData> GetPersistenceDataForSymbol(lldb::SBSymbol &symbol) {
   protocol::PersistenceData persistence_data;
@@ -75,13 +97,25 @@ protocol::Breakpoint Breakpoint::ToProtocolBreakpoint() {
     std::optional<protocol::Source> source = m_context.ResolveSource(bp_addr);
     const bool is_assembly_source = source && source->sourceReference.value_or(0) != 0;
     if (source && !is_assembly_source) {
-      auto line_entry = bp_addr.GetLineEntry();
-      const auto line = line_entry.GetLine();
-      if (line != LLDB_INVALID_LINE_NUMBER)
-        breakpoint.line = line;
-      const auto column = line_entry.GetColumn();
-      if (column != LLDB_INVALID_COLUMN_NUMBER)
-        breakpoint.column = column;
+      const CallSiteLocation call_site = GetOutermostInlinedCallSite(bp_addr);
+      if (call_site.file.IsValid()) {
+        // ResolveSource() above hits the same innermost-row resolution, so
+        // source needs overriding here too.
+        if (std::optional<protocol::Source> call_site_source = CreateSource(call_site.file))
+          source = std::move(call_site_source);
+        if (call_site.line != LLDB_INVALID_LINE_NUMBER)
+          breakpoint.line = call_site.line;
+        if (call_site.column != LLDB_INVALID_COLUMN_NUMBER)
+          breakpoint.column = call_site.column;
+      } else {
+        auto line_entry = bp_addr.GetLineEntry();
+        const auto line = line_entry.GetLine();
+        if (line != LLDB_INVALID_LINE_NUMBER)
+          breakpoint.line = line;
+        const auto column = line_entry.GetColumn();
+        if (column != LLDB_INVALID_COLUMN_NUMBER)
+          breakpoint.column = column;
+      }
     } else if (source) {
       // Assembly breakpoint.
       auto symbol = bp_addr.GetSymbol();

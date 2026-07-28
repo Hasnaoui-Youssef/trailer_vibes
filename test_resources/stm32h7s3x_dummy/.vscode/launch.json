@@ -1,0 +1,18 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Trailer: Launch (dummy board)",
+			"type": "trailer",
+			"request": "launch",
+			"program": "${workspaceFolder}/Makefile/Boot/build/dbg_h7rs_Boot.elf",
+			"openocd": {
+				"scriptSearchDirs": ["${workspaceFolder}/../../external/openocd/tcl"],
+				"configFiles": ["board/st_nucleo_h7s.cfg"],
+				"gdbPort": "3333"
+			},
+			"debugAdapterExecutable": "${workspaceFolder}/../../build/trailer-dap",
+			"stopOnEntry": true
+		}
+	]
+}
