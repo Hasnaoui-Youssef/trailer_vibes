@@ -162,6 +162,8 @@ private:
         orchestrator_.Send(dap::protocol::Event{"trailerReset", llvm::json::Object{{"phase", phase}}});
     }
 
+    void HandleDomainEvent(const core::TraceStatusEvent &event) { SendTypedEvent("trailerTraceStatus", event.body); }
+
     void HandleDomainEvent(const core::TraceDataEvent &event) {
         llvm::Expected<const disasm::ProgramDisassembler &> program = context_.Disassembly().Program();
         const disasm::ProgramDisassembler *program_ptr = nullptr;

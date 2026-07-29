@@ -94,6 +94,10 @@ struct Configuration {
   bool displayExtendedBacktrace = false;
   bool stopOnEntry = false;
 
+  // Forces LLDB's internal thread-plan breakpoints to hardware too, not just
+  // user breakpoints - a software one is a silent no-op on flash targets.
+  bool requireHardwareBreakpoints = true;
+
   std::chrono::seconds timeout = std::chrono::seconds(30);
   std::string commandEscapePrefix = "`";
   std::optional<std::string> customFrameFormat;
@@ -638,8 +642,25 @@ using TraceEnableArguments = EmptyArguments;
 using TraceDisableArguments = EmptyArguments;
 using TraceStatusArguments = EmptyArguments;
 
+// A session-level snapshot: whether trace hardware exists at all (available),
+// separately from whether it's currently armed (enabled). Shared verbatim
+// between the trailerTraceStatus request/response and its push event, so a
+// client never has to reconcile two different shapes for the same fact.
+enum class TraceStatusReason : unsigned {
+    eTraceStatusReasonUnavailable,
+    eTraceStatusReasonIdle,
+    eTraceStatusReasonArmedAwaitingResume,
+    eTraceStatusReasonCapturing,
+    eTraceStatusReasonDecodeError,
+};
+
 struct TraceStatusResponseBody {
+    bool available = false;
     bool enabled = false;
+    TraceStatusReason reason = TraceStatusReason::eTraceStatusReasonUnavailable;
+    std::string detail;
+    uint64_t instructionCount = 0;
+    uint64_t functionBlockCount = 0;
 };
 llvm::json::Value toJSON(const TraceStatusResponseBody &);
 

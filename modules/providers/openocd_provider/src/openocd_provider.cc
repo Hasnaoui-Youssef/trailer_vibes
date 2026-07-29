@@ -514,49 +514,50 @@ std::expected<void, std::string> OpenOcdProvider::ConfigureTrace(const std::stri
 std::expected<void, std::string> OpenOcdProvider::EnableTrace(const std::string& name) {
     int exit_code = 0;
     bool found = false;
+    int retval = ERROR_OK;
     bool ok = impl_->queue.RunSync([&]() {
         return RunGuarded(
             [&]() {
                 if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) {
                     found = true;
-                    tmc_open_output(tmc);
-                    tmc->capture_requested = true;
+                    retval = tmc_enable(tmc);
                     return;
                 }
                 if (struct etmv4_object* etmv4 = etmv4_find_by_name(name.c_str())) {
                     found = true;
-                    etmv4_object_set_trace_requested(etmv4, true);
+                    retval = etmv4_enable(etmv4);
                 }
             },
             &exit_code);
     });
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during EnableTrace");
     if (!found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
+    if (retval != ERROR_OK) return std::unexpected("'" + name + "' failed to enable");
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::DisableTrace(const std::string& name) {
     int exit_code = 0;
     bool found = false;
+    int retval = ERROR_OK;
     bool ok = impl_->queue.RunSync([&]() {
         return RunGuarded(
             [&]() {
                 if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) {
                     found = true;
-                    tmc->capture_requested = false;
-                    if (tmc->state == TMC_STOPPED) tmc_extract_data(tmc);
-                    tmc_close_output(tmc);
+                    retval = tmc_disable(tmc);
                     return;
                 }
                 if (struct etmv4_object* etmv4 = etmv4_find_by_name(name.c_str())) {
                     found = true;
-                    etmv4_object_set_trace_requested(etmv4, false);
+                    retval = etmv4_disable(etmv4);
                 }
             },
             &exit_code);
     });
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during DisableTrace");
     if (!found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
+    if (retval != ERROR_OK) return std::unexpected("'" + name + "' failed to disable");
     return {};
 }
 

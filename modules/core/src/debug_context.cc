@@ -54,13 +54,27 @@ void DebugContext::ShutdownOpenOcd() { openocd_provider_.reset(); }
 
 llvm::Error DebugContext::CreateTrace() {
   std::expected<std::unique_ptr<TraceManager>, std::string> result = TraceManager::Create(*this);
-  if (!result)
+  if (!result) {
+    trace_unavailable_reason_ = result.error();
     return llvm::make_error<dap::DAPError>(result.error());
+  }
   trace_manager_ = std::move(*result);
+  trace_unavailable_reason_.clear();
   return llvm::Error::success();
 }
 
 void DebugContext::ShutdownTrace() { trace_manager_.reset(); }
+
+dap::protocol::TraceStatusResponseBody DebugContext::TraceStatus() {
+  if (!trace_manager_) {
+    dap::protocol::TraceStatusResponseBody body;
+    body.available = false;
+    body.reason = dap::protocol::TraceStatusReason::eTraceStatusReasonUnavailable;
+    body.detail = trace_unavailable_reason_;
+    return body;
+  }
+  return trace_manager_->Status();
+}
 
 void DebugContext::RunStopCommands() { target_manager_->RunStopCommands(); }
 void DebugContext::RunExitCommands() { target_manager_->RunExitCommands(); }

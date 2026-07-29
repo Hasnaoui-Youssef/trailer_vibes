@@ -39,7 +39,7 @@ public:
   uint32_t GetColumn() const { return m_column; }
 
 protected:
-  void CreatePathBreakpoint(const protocol::Source &source);
+  llvm::Error CreatePathBreakpoint(const protocol::Source &source);
   llvm::Error
   CreateAssemblyBreakpointWithSourceReference(int64_t source_reference);
   llvm::Error CreateAssemblyBreakpointWithPersistenceData(

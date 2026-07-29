@@ -12,7 +12,7 @@ TraceDisableRequestHandler::Run(const protocol::TraceDisableArguments &) const {
     return llvm::make_error<DAPError>("trace is not available for this session");
   if (llvm::Error err = trace->Disable())
     return std::move(err);
-  return protocol::TraceStatusResponseBody{trace->enabled()};
+  return trace->Status();
 }
 
 } // namespace dap

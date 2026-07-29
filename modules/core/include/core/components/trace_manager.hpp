@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "dap/protocol/protocol_requests.hpp"
 #include "llvm/Support/Error.h"
 #include "trace_model/function_block.hpp"
 #include "trace_model/reconstructed_instruction.hpp"
@@ -21,7 +22,7 @@ class DebugContext;
 
 // Trace is armed by an explicit command only (never from launch config).
 // The first TMC sink and first ETMv4 source found in the sourced OpenOCD
-// config are used - the client never names components (see CLAUDE.md).
+// config are used
 class TraceManager {
 public:
   static std::expected<std::unique_ptr<TraceManager>, std::string> Create(DebugContext &context);
@@ -33,6 +34,7 @@ public:
   llvm::Error Enable();
   llvm::Error Disable();
   bool enabled() const;
+  dap::protocol::TraceStatusResponseBody Status() const;
 
 private:
   TraceManager(DebugContext &context, std::string sink, std::string source,

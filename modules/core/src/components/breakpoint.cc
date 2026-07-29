@@ -5,9 +5,10 @@
 #include <mutex>
 #include <string>
 
+#include "core/components/disassembly_manager.hpp"
 #include "core/lldb_utils.hpp"
+#include "disassembler/program_disassembler.hpp"
 #include "lldb/API/SBAddress.h"
-#include "lldb/API/SBBlock.h"
 #include "lldb/API/SBBreakpointLocation.h"
 #include "lldb/API/SBError.h"
 #include "lldb/API/SBFileSpec.h"
@@ -15,31 +16,11 @@
 #include "lldb/API/SBModule.h"
 #include "lldb/API/SBMutex.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Error.h"
 
 namespace core {
 
 namespace {
-
-// At an inlined call site, SBAddress::GetLineEntry() resolves to the
-// innermost inlined frame's row instead of the call site's own row.
-struct CallSiteLocation {
-  lldb::SBFileSpec file;
-  uint32_t line = LLDB_INVALID_LINE_NUMBER;
-  uint32_t column = LLDB_INVALID_COLUMN_NUMBER;
-};
-
-CallSiteLocation GetOutermostInlinedCallSite(lldb::SBAddress addr) {
-  CallSiteLocation call_site;
-  lldb::SBBlock inlined_block = addr.GetBlock().GetContainingInlinedBlock();
-  while (inlined_block.IsValid()) {
-    call_site.file = inlined_block.GetInlinedCallSiteFile();
-    call_site.line = inlined_block.GetInlinedCallSiteLine();
-    call_site.column = inlined_block.GetInlinedCallSiteColumn();
-    lldb::SBBlock parent = inlined_block.GetParent();
-    inlined_block = parent.IsValid() ? parent.GetContainingInlinedBlock() : lldb::SBBlock();
-  }
-  return call_site;
-}
 
 std::optional<protocol::PersistenceData> GetPersistenceDataForSymbol(lldb::SBSymbol &symbol) {
   protocol::PersistenceData persistence_data;
@@ -74,19 +55,26 @@ protocol::Breakpoint Breakpoint::ToProtocolBreakpoint() {
   if (!m_bp.IsValid())
     return breakpoint;
 
-  breakpoint.verified = m_bp.GetNumResolvedLocations() > 0;
   breakpoint.id = m_bp.GetID();
   if (!m_hardware_error.empty())
     breakpoint.message = m_hardware_error;
-  lldb::SBBreakpointLocation bp_loc;
+
+  // Prefer an enabled+resolved location - PruneNonCodeLocations() disables
+  // ones that aren't real code, so a disabled one isn't a real site.
+  lldb::SBBreakpointLocation best;
+  lldb::SBBreakpointLocation enabled;
   const auto num_locs = m_bp.GetNumLocations();
-  for (size_t i = 0; i < num_locs; ++i) {
-    bp_loc = m_bp.GetLocationAtIndex(i);
-    if (bp_loc.IsResolved())
-      break;
+  for (size_t i = 0; i < num_locs && !best.IsValid(); ++i) {
+    lldb::SBBreakpointLocation loc = m_bp.GetLocationAtIndex(i);
+    if (!loc.IsEnabled())
+      continue;
+    if (!enabled.IsValid())
+      enabled = loc;
+    if (loc.IsResolved())
+      best = loc;
   }
-  if (!bp_loc.IsResolved())
-    bp_loc = m_bp.GetLocationAtIndex(0);
+  lldb::SBBreakpointLocation bp_loc = best.IsValid() ? best : (enabled.IsValid() ? enabled : m_bp.GetLocationAtIndex(0));
+  breakpoint.verified = best.IsValid();
   auto bp_addr = bp_loc.GetAddress();
 
   if (bp_addr.IsValid()) {
@@ -145,9 +133,27 @@ bool Breakpoint::MatchesName(const char *name) {
   return m_bp.MatchesName(name);
 }
 
+void Breakpoint::PruneNonCodeLocations() {
+  llvm::Expected<const disasm::ProgramDisassembler &> program = m_context.Disassembly().Program();
+  if (!program) {
+    llvm::consumeError(program.takeError());
+    return;
+  }
+
+  const auto num_locs = m_bp.GetNumLocations();
+  for (size_t i = 0; i < num_locs; ++i) {
+    lldb::SBBreakpointLocation loc = m_bp.GetLocationAtIndex(i);
+    const lldb::addr_t addr = loc.GetLoadAddress();
+    if (addr != LLDB_INVALID_ADDRESS && program->InstructionInfoAt(addr) == nullptr)
+      loc.SetEnabled(false);
+  }
+}
+
 void Breakpoint::SetBreakpoint() {
   lldb::SBMutex lock = m_context.GetAPIMutex();
   std::lock_guard<lldb::SBMutex> guard(lock);
+
+  PruneNonCodeLocations();
 
   // Default every breakpoint to hardware: on this project's embedded
   // targets, a software breakpoint is a plain memory write, which silently

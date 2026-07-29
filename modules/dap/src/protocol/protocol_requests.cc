@@ -13,6 +13,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Base64.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include <utility>
 
@@ -190,6 +191,7 @@ bool fromJSON(const json::Value &Params, Configuration &C, json::Path P) {
          O.mapOptional("displayExtendedBacktrace",
                        C.displayExtendedBacktrace) &&
          O.mapOptional("stopOnEntry", C.stopOnEntry) &&
+         O.mapOptional("requireHardwareBreakpoints", C.requireHardwareBreakpoints) &&
          O.mapOptional("commandEscapePrefix", C.commandEscapePrefix) &&
          O.mapOptional("customFrameFormat", C.customFrameFormat) &&
          O.mapOptional("customThreadFormat", C.customThreadFormat) &&
@@ -756,8 +758,33 @@ llvm::json::Value toJSON(const StackTraceResponseBody &Body) {
   return result;
 }
 
+static llvm::StringRef ToString(TraceStatusReason reason) {
+  switch (reason) {
+  case TraceStatusReason::eTraceStatusReasonUnavailable:
+    return "unavailable";
+  case TraceStatusReason::eTraceStatusReasonIdle:
+    return "idle";
+  case TraceStatusReason::eTraceStatusReasonArmedAwaitingResume:
+    return "armedAwaitingResume";
+  case TraceStatusReason::eTraceStatusReasonCapturing:
+    return "capturing";
+  case TraceStatusReason::eTraceStatusReasonDecodeError:
+    return "decodeError";
+  }
+  llvm_unreachable("unhandled trace status reason.");
+}
+
 llvm::json::Value toJSON(const TraceStatusResponseBody &Body) {
-    return llvm::json::Value(json::Object{{"enabled", Body.enabled}});
+  json::Object result{
+      {"available", Body.available},
+      {"enabled", Body.enabled},
+      {"reason", ToString(Body.reason)},
+      {"instructionCount", Body.instructionCount},
+      {"functionBlockCount", Body.functionBlockCount},
+  };
+  if (!Body.detail.empty())
+    result.insert({"detail", Body.detail});
+  return result;
 }
 
 

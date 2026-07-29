@@ -186,10 +186,12 @@ std::vector<protocol::Breakpoint> BreakpointManager::SetSourceBreakpoints(
 
 namespace {
 
-std::vector<std::pair<uint32_t, uint32_t>> GetSourceBreakpointLocations(
-    lldb::SBTarget &target, const std::string &path, uint32_t start_line, uint32_t start_column, uint32_t end_line,
-    uint32_t end_column) {
-  std::vector<std::pair<uint32_t, uint32_t>> locations;
+using LocationLine = std::pair<uint32_t, std::optional<uint32_t>>;
+
+std::vector<LocationLine> GetSourceBreakpointLocations(lldb::SBTarget &target, const std::string &path,
+                                                        uint32_t start_line, uint32_t start_column,
+                                                        uint32_t end_line, uint32_t end_column) {
+  std::vector<LocationLine> locations;
   lldb::SBFileSpec file_spec(path.c_str(), true);
   lldb::SBSymbolContextList compile_units = target.FindCompileUnits(file_spec);
 
@@ -203,17 +205,27 @@ std::vector<std::pair<uint32_t, uint32_t>> GetSourceBreakpointLocations(
     for (uint32_t l_idx = 0, l_limit = compile_unit.GetNumLineEntries(); l_idx < l_limit; ++l_idx) {
       lldb::SBLineEntry line_entry = compile_unit.GetLineEntryAtIndex(l_idx);
 
+      // An end-of-sequence row is a zero-width terminator marking the address
+      // just past the last real instruction, not a real breakpoint site.
+      if (line_entry.GetStartAddress() == line_entry.GetEndAddress())
+        continue;
+
       // Filter by line / column
       uint32_t line = line_entry.GetLine();
       if (line < start_line || line > end_line)
         continue;
-      uint32_t column = line_entry.GetColumn();
-      if (column == LLDB_INVALID_COLUMN_NUMBER)
-        continue;
-      if (line == start_line && column < start_column)
-        continue;
-      if (line == end_line && column > end_column)
-        continue;
+
+      // Column 0 means "no column info" (e.g. gas-emitted assembly), not
+      // invalid - keep the row, only bound by column when one exists.
+      uint32_t raw_column = line_entry.GetColumn();
+      std::optional<uint32_t> column;
+      if (raw_column != LLDB_INVALID_COLUMN_NUMBER) {
+        column = raw_column;
+        if (line == start_line && raw_column < start_column)
+          continue;
+        if (line == end_line && raw_column > end_column)
+          continue;
+      }
 
       if (line_entry.GetFileSpec().GetFilename() != primary_file_spec.GetFilename() ||
           line_entry.GetFileSpec().GetDirectory() != primary_file_spec.GetDirectory())
@@ -226,10 +238,9 @@ std::vector<std::pair<uint32_t, uint32_t>> GetSourceBreakpointLocations(
   return locations;
 }
 
-std::vector<std::pair<uint32_t, uint32_t>> GetAssemblyBreakpointLocations(lldb::SBTarget &target,
-                                                                          int64_t source_reference,
-                                                                          uint32_t start_line, uint32_t end_line) {
-  std::vector<std::pair<uint32_t, uint32_t>> locations;
+std::vector<LocationLine> GetAssemblyBreakpointLocations(lldb::SBTarget &target, int64_t source_reference,
+                                                          uint32_t start_line, uint32_t end_line) {
+  std::vector<LocationLine> locations;
   lldb::SBAddress address(source_reference, target);
   if (!address.IsValid())
     return locations;
@@ -261,7 +272,7 @@ protocol::BreakpointLocationsResponseBody BreakpointManager::GetBreakpointLocati
   uint32_t end_line = args.endLine.value_or(start_line);
   uint32_t end_column = args.endColumn.value_or(std::numeric_limits<uint32_t>::max());
 
-  std::vector<std::pair<uint32_t, uint32_t>> locations;
+  std::vector<LocationLine> locations;
   if (args.source.sourceReference) {
     locations = GetAssemblyBreakpointLocations(m_context.Target(), *args.source.sourceReference, start_line, end_line);
   } else {

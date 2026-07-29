@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dap/protocol/protocol_events.hpp"
+#include "dap/protocol/protocol_requests.hpp"
 #include "trace_model/function_block.hpp"
 #include "trace_model/reconstructed_instruction.hpp"
 #include "trace_model/trace_gap.hpp"
@@ -82,9 +83,13 @@ struct ResetEvent {
   ResetPhase phase;
 };
 
+struct TraceStatusEvent {
+  dap::protocol::TraceStatusResponseBody body;
+};
+
 using DomainEvent = std::variant<OutputEvent, StoppedEvent, ContinuedEvent, ExitedEvent, ThreadExitedEvent,
                                  ProcessEvent, CapabilitiesEvent, InvalidatedEvent, MemoryEvent, ModuleEvent,
-                                 BreakpointEvent, TerminatedEvent, TraceDataEvent, ResetEvent>;
+                                 BreakpointEvent, TerminatedEvent, TraceDataEvent, ResetEvent, TraceStatusEvent>;
 
 class EventBus {
 public:

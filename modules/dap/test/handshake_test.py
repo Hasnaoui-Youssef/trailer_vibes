@@ -106,11 +106,13 @@ def main() -> int:
               file=sys.stderr)
         ok = False
 
-    # No session has been launched, so trailerTraceEnable/Disable/Status are
-    # expected to fail (no core::TraceManager) - the property under test is
-    # that they're recognized commands at all, not "unrecognized request".
+    # No session has been launched, so there's no core::TraceManager yet.
+    # trailerTraceEnable/Disable are actions and still fail without one;
+    # trailerTraceStatus is a query and must succeed regardless, reporting
+    # available:false rather than erroring out (see DebugContext::TraceStatus).
     if ok:
-        for seq, command in enumerate(("trailerTraceEnable", "trailerTraceDisable", "trailerTraceStatus"), start=2):
+        expect_success = {"trailerTraceEnable": False, "trailerTraceDisable": False, "trailerTraceStatus": True}
+        for seq, command in enumerate(expect_success, start=2):
             proc.stdin.write(frame({"type": "request", "seq": seq, "command": command}))
             proc.stdin.flush()
             try:
@@ -126,6 +128,16 @@ def main() -> int:
                 break
             if "unrecognized request" in trace_response.get("message", ""):
                 print(f"handshake_test: FAILED '{command}' was not recognized: {trace_response}", file=sys.stderr)
+                ok = False
+                break
+            if bool(trace_response.get("success")) != expect_success[command]:
+                print(f"handshake_test: FAILED '{command}' expected success={expect_success[command]}, "
+                      f"got: {trace_response}", file=sys.stderr)
+                ok = False
+                break
+            if command == "trailerTraceStatus" and (trace_response.get("body") or {}).get("available") is not False:
+                print(f"handshake_test: FAILED trailerTraceStatus expected available:false pre-launch, "
+                      f"got: {trace_response}", file=sys.stderr)
                 ok = False
                 break
 

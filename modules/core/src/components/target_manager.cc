@@ -8,6 +8,7 @@
 #include "core/components/disassembly_manager.hpp"
 #include "core/components/execution_controller.hpp"
 #include "core/components/memory_manager.hpp"
+#include "core/components/trace_manager.hpp"
 #include "core/debug_context.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
@@ -88,6 +89,15 @@ void TargetManager::ConfigureSourceMaps() {
     strm << "\".\" \"" << configuration.sourcePath << "\"";
   }
   RunLLDBCommands("Setting source map:", {source_map_command});
+}
+
+llvm::Error TargetManager::ConfigureHardwareBreakpointRequirement() {
+  std::string command = llvm::formatv("settings set target.require-hardware-breakpoint {0}",
+                                       configuration.requireHardwareBreakpoints ? "true" : "false")
+                             .str();
+  if (!RunLLDBCommands("Setting hardware breakpoint requirement:", {command}))
+    return CreateRunLLDBCommandsErrorMessage("hardware breakpoint requirement");
+  return llvm::Error::success();
 }
 
 lldb::SBTarget TargetManager::CreateTarget(lldb::SBError &error) {
@@ -243,6 +253,8 @@ llvm::Error TargetManager::Attach(const dap::protocol::AttachRequestArguments &a
     return err;
 
   ConfigureSourceMaps();
+  if (llvm::Error err = ConfigureHardwareBreakpointRequirement())
+    return err;
 
   lldb::SBError error;
   lldb::SBTarget target;
@@ -352,6 +364,8 @@ llvm::Error TargetManager::Launch(const dap::protocol::LaunchRequestArguments &a
     return err;
 
   ConfigureSourceMaps();
+  if (llvm::Error err = ConfigureHardwareBreakpointRequirement())
+    return err;
 
   lldb::SBError error;
   lldb::SBTarget target = CreateTarget(error);
@@ -371,6 +385,7 @@ llvm::Error TargetManager::Launch(const dap::protocol::LaunchRequestArguments &a
   // has them - absence is not a Launch failure, just no trace this session.
   if (llvm::Error err = m_context.CreateTrace())
     m_context.SendOutput(OutputCategory::Console, "trace unavailable: " + llvm::toString(std::move(err)));
+  m_context.Emit(TraceStatusEvent{m_context.TraceStatus()});
 
   RunPostRunCommands();
 
@@ -395,11 +410,14 @@ llvm::Error TargetManager::Restart(const std::optional<dap::protocol::RestartArg
       last_launch_request = *launch_arguments;
       SetConfiguration(launch_arguments->configuration, /*is_attach=*/false);
       ConfigureSourceMaps();
+      if (llvm::Error err = ConfigureHardwareBreakpointRequirement())
+        return err;
     }
   }
 
   lldb::SBProcess process = m_context.Target().GetProcess();
   const bool was_running = !lldb::SBDebugger::StateIsStoppedState(process.GetState());
+  const bool trace_was_enabled = m_context.Trace() && m_context.Trace()->enabled();
 
   m_context.Emit(ResetEvent{ResetPhase::Started});
   m_context.Execution().SendContinuedEvent();
@@ -416,8 +434,17 @@ llvm::Error TargetManager::Restart(const std::optional<dap::protocol::RestartArg
   }
 
   m_context.Disassembly().InvalidateProgram();
-  if (llvm::Error err = m_context.CreateTrace())
+  if (llvm::Error err = m_context.CreateTrace()) {
     m_context.SendOutput(OutputCategory::Console, "trace unavailable: " + llvm::toString(std::move(err)));
+    m_context.Emit(TraceStatusEvent{m_context.TraceStatus()});
+  } else if (trace_was_enabled) {
+    if (llvm::Error err = m_context.Trace()->Enable()) {
+      m_context.SendOutput(OutputCategory::Console, "trace re-arm failed: " + llvm::toString(std::move(err)));
+      m_context.Emit(TraceStatusEvent{m_context.TraceStatus()});
+    }
+  } else {
+    m_context.Emit(TraceStatusEvent{m_context.TraceStatus()});
+  }
 
   // A halt while already running produces a genuine stop reply on its own
   // (frontend_state was TARGET_RUNNING) - no resync needed.
@@ -463,6 +490,13 @@ llvm::Error TargetManager::InitializeDebugger() {
   {
     lldb::SBCommandReturnObject result;
     debugger.GetCommandInterpreter().HandleCommand("settings set symbols.enable-external-lookup false", result);
+  }
+
+  // Prevents a user ~/.lldbinit from undoing breakpoint.cc's inlined-call-site
+  // resolution (GetOutermostInlinedCallSite()).
+  {
+    lldb::SBCommandReturnObject result;
+    debugger.GetCommandInterpreter().HandleCommand("settings set target.inline-breakpoint-strategy always", result);
   }
 
   m_context.Target() = debugger.GetDummyTarget();

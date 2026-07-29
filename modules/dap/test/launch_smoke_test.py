@@ -239,6 +239,135 @@ def run_trace_checks(client: Client, program_path: str, thread_id: int) -> bool:
     return True
 
 
+def run_trace_status_checks(client: Client, thread_id: int) -> bool:
+    """trailerTraceStatus must reflect real state at every step - idle before
+    enable, armedAwaitingResume right after (while halted), capturing after a
+    capture - and, the regression guard for the restart-disarms-trace bug,
+    enabled again after restart with no trailerTraceData arriving before the
+    next resume. Requires main.c:106's breakpoint from run_trace_checks."""
+    print("-> trailerTraceStatus (expect idle)")
+    client.send("trailerTraceStatus")
+    resp = client.wait_for_response("trailerTraceStatus")
+    body = resp.get("body") or {}
+    if not resp.get("success") or body.get("available") is not True or body.get("reason") != "idle":
+        print(f"FAILED: expected available:true, reason:idle before enable, got: {resp}", file=sys.stderr)
+        return False
+
+    print("-> trailerTraceEnable (expect armedAwaitingResume + a trailerTraceStatus event)")
+    client.send("trailerTraceEnable")
+    found = client.wait_for_all(
+        {
+            "resp": lambda m: m.get("type") == "response" and m.get("command") == "trailerTraceEnable",
+            "status_event": lambda m: m.get("type") == "event" and m.get("event") == "trailerTraceStatus",
+        },
+        max_messages=20)
+    if "resp" not in found or "status_event" not in found:
+        print(f"FAILED: trailerTraceEnable did not produce both a response and a status event: {found}",
+              file=sys.stderr)
+        return False
+    enable_body = found["resp"][1].get("body") or {}
+    event_body = found["status_event"][1].get("body") or {}
+    if enable_body.get("reason") != "armedAwaitingResume" or event_body.get("reason") != "armedAwaitingResume":
+        print(f"FAILED: expected reason armedAwaitingResume from enable, got response={enable_body} "
+              f"event={event_body}", file=sys.stderr)
+        return False
+
+    print("-> continue (expect a capturing status matching the capture's instruction count)")
+    found = continue_and_wait(client, thread_id, want_trace_data=True)
+    if "trace_data" not in found or "stopped" not in found:
+        print(f"FAILED: did not see both trailerTraceData and stopped: {found}", file=sys.stderr)
+        return False
+    trace_body = found["trace_data"][1].get("body") or {}
+    instruction_count = len(trace_body.get("instructions", []))
+
+    client.send("trailerTraceStatus")
+    resp = client.wait_for_response("trailerTraceStatus")
+    body = resp.get("body") or {}
+    # The process is halted again by the time this query runs, so the reason
+    # correctly reverts to armedAwaitingResume - it reflects current run
+    # state, not history (see TraceManager::Status()).
+    if body.get("enabled") is not True or body.get("instructionCount") != instruction_count:
+        print(f"FAILED: expected enabled:true, instructionCount={instruction_count} after capture, got: {resp}",
+              file=sys.stderr)
+        return False
+    print(f"   status after capture: {body}")
+
+    print("-> restart (regression guard: trace must re-arm, not silently disarm)")
+    watermark = len(client.all_messages)
+    client.send("restart")
+    found = client.wait_for_all(
+        {
+            "stopped": lambda m: m.get("type") == "event" and m.get("event") == "stopped",
+            "status_event": lambda m: m.get("type") == "event" and m.get("event") == "trailerTraceStatus",
+        },
+        max_messages=40)
+    if "stopped" not in found or "status_event" not in found:
+        print(f"FAILED: restart did not produce both 'stopped' and a trailerTraceStatus event: {found}",
+              file=sys.stderr)
+        return False
+    restart_status_body = found["status_event"][1].get("body") or {}
+    if restart_status_body.get("enabled") is not True:
+        print(f"FAILED: trace was not re-armed after restart: {restart_status_body}", file=sys.stderr)
+        return False
+
+    saw_trace_data_before_resume = any(
+        m.get("type") == "event" and m.get("event") == "trailerTraceData" for m in client.all_messages[watermark:])
+    if saw_trace_data_before_resume:
+        print("FAILED: trailerTraceData arrived between restart and the next resume", file=sys.stderr)
+        return False
+
+    print("-> trailerTraceStatus (confirm enabled after restart)")
+    client.send("trailerTraceStatus")
+    resp = client.wait_for_response("trailerTraceStatus")
+    body = resp.get("body") or {}
+    if body.get("enabled") is not True or body.get("reason") != "armedAwaitingResume":
+        print(f"FAILED: expected enabled:true, reason:armedAwaitingResume after restart, got: {resp}",
+              file=sys.stderr)
+        return False
+
+    print("-> continue (expect a genuinely new trailerTraceData after restart)")
+    found = continue_and_wait(client, thread_id, want_trace_data=True)
+    if "trace_data" not in found or "stopped" not in found:
+        print(f"FAILED: no trailerTraceData after restart + continue: {found}", file=sys.stderr)
+        return False
+    post_restart_body = found["trace_data"][1].get("body") or {}
+    if post_restart_body.get("firstInstructionIndex") != 0:
+        print(f"FAILED: expected firstInstructionIndex 0 after restart's fresh TraceManager, got: "
+              f"{post_restart_body}", file=sys.stderr)
+        return False
+    print("   confirmed: restart re-arms trace and a fresh capture follows")
+
+    print("-> trailerTraceDisable (cleanup)")
+    client.send("trailerTraceDisable")
+    resp = client.wait_for_response("trailerTraceDisable")
+    if not resp.get("success"):
+        print(f"FAILED: trailerTraceDisable did not succeed: {resp}", file=sys.stderr)
+        return False
+
+    return True
+
+
+def run_inline_call_site_checks(client: Client) -> bool:
+    """0x080003de is main.c's inlined SCB_EnableICache() call site (issue #1's
+    original repro address) - address-based resolution must land on the
+    outer call site (main.c:73), not the inlined callee's innermost DWARF
+    row (cachel1_armv7.h), even though LLDB's own LineEntry still does."""
+    print("-> disassemble (0x080003de - inlined call site)")
+    client.send("disassemble", {"memoryReference": "0x080003de", "instructionCount": 1})
+    resp = client.wait_for_response("disassemble")
+    instructions = (resp.get("body") or {}).get("instructions", [])
+    if not resp.get("success") or not instructions:
+        print(f"FAILED: disassemble returned no instructions: {resp}", file=sys.stderr)
+        return False
+    location = instructions[0].get("location") or {}
+    if location.get("name") != "main.c" or instructions[0].get("line") != 73:
+        print(f"FAILED: 0x080003de resolved to {location.get('name')}:{instructions[0].get('line')}, "
+              f"expected main.c:73", file=sys.stderr)
+        return False
+    print(f"   confirmed: 0x080003de resolves to main.c:73, not the inlined callee's own file/line")
+    return True
+
+
 def run_restart_checks(client: Client, thread_id: int) -> bool:
     """Restart from a real breakpoint halt (main.c:106, still armed after
     run_trace_checks) must land on Reset_Handler with fresh state, not the
@@ -451,6 +580,12 @@ def main() -> int:
 
         if thread_id is not None and ok:
             ok = run_trace_checks(client, program_path, thread_id)
+
+        if thread_id is not None and ok:
+            ok = run_trace_status_checks(client, thread_id)
+
+        if ok:
+            ok = run_inline_call_site_checks(client)
 
         if thread_id is not None and ok:
             ok = run_restart_checks(client, thread_id)

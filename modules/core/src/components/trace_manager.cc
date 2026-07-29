@@ -7,6 +7,9 @@
 #include "core/debug_context.hpp"
 #include "dap/dap_error.hpp"
 #include "disassembler/program_disassembler.hpp"
+#include "lldb/API/SBDebugger.h"
+#include "lldb/API/SBMutex.h"
+#include "lldb/API/SBProcess.h"
 #include "llvm/Support/Error.h"
 #include "openocd_provider/openocd_provider.hpp"
 #include "trace_model/instruction_trace_decode_config.hpp"
@@ -100,8 +103,11 @@ llvm::Error TraceManager::Enable() {
   if (std::expected<void, std::string> ok = m_context.OpenOcd()->EnableTrace(source_); !ok)
     return llvm::make_error<dap::DAPError>(ok.error());
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  enabled_ = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    enabled_ = true;
+  }
+  m_context.Emit(TraceStatusEvent{Status()});
   return llvm::Error::success();
 }
 
@@ -111,15 +117,39 @@ llvm::Error TraceManager::Disable() {
   if (std::expected<void, std::string> ok = m_context.OpenOcd()->DisableTrace(sink_); !ok)
     return llvm::make_error<dap::DAPError>(ok.error());
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  enabled_ = false;
-  pending_.clear();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    enabled_ = false;
+    pending_.clear();
+  }
+  m_context.Emit(TraceStatusEvent{Status()});
   return llvm::Error::success();
 }
 
 bool TraceManager::enabled() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return enabled_;
+}
+
+dap::protocol::TraceStatusResponseBody TraceManager::Status() const {
+  dap::protocol::TraceStatusResponseBody body;
+  body.available = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.enabled = enabled_;
+    body.instructionCount = instructions_.size();
+    body.functionBlockCount = function_blocks_.size();
+  }
+  if (!body.enabled) {
+    body.reason = dap::protocol::TraceStatusReason::eTraceStatusReasonIdle;
+    return body;
+  }
+  lldb::SBMutex api_lock = m_context.GetAPIMutex();
+  std::lock_guard<lldb::SBMutex> api_guard(api_lock);
+  const bool stopped = lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState());
+  body.reason = stopped ? dap::protocol::TraceStatusReason::eTraceStatusReasonArmedAwaitingResume
+                        : dap::protocol::TraceStatusReason::eTraceStatusReasonCapturing;
+  return body;
 }
 
 void TraceManager::OnCapture(std::span<const std::byte> data, bool is_barrier) {
@@ -136,6 +166,14 @@ void TraceManager::OnCapture(std::span<const std::byte> data, bool is_barrier) {
   pending_.clear();
   if (!increment) {
     m_context.SendOutput(OutputCategory::Important, "trace decode failed: " + increment.error());
+    dap::protocol::TraceStatusResponseBody status;
+    status.available = true;
+    status.enabled = enabled_;
+    status.reason = dap::protocol::TraceStatusReason::eTraceStatusReasonDecodeError;
+    status.detail = increment.error();
+    status.instructionCount = instructions_.size();
+    status.functionBlockCount = function_blocks_.size();
+    m_context.Emit(TraceStatusEvent{std::move(status)});
     return;
   }
 
@@ -148,10 +186,18 @@ void TraceManager::OnCapture(std::span<const std::byte> data, bool is_barrier) {
                            increment->function_blocks.end());
   gaps_.insert(gaps_.end(), increment->gaps.begin(), increment->gaps.end());
 
+  dap::protocol::TraceStatusResponseBody status;
+  status.available = true;
+  status.enabled = enabled_;
+  status.reason = dap::protocol::TraceStatusReason::eTraceStatusReasonCapturing;
+  status.instructionCount = instructions_.size();
+  status.functionBlockCount = function_blocks_.size();
+
   event.instructions = std::move(increment->instructions);
   event.function_blocks = std::move(increment->function_blocks);
   event.gaps = std::move(increment->gaps);
   m_context.Emit(std::move(event));
+  m_context.Emit(TraceStatusEvent{std::move(status)});
 }
 
 }  // namespace core

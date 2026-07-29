@@ -12,6 +12,7 @@
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBLineEntry.h"
 #include "lldb/API/SBTarget.h"
+#include "lldb/lldb-defines.h"
 #include "lldb/lldb-types.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
@@ -22,6 +23,16 @@
 namespace core {
 
 std::string GetSBFileSpecPath(const lldb::SBFileSpec &file_spec);
+
+/// At an inlined call site, SBAddress::GetLineEntry() resolves to the
+/// innermost inlined frame's row instead of the call site's own row.
+struct CallSiteLocation {
+  lldb::SBFileSpec file;
+  uint32_t line = LLDB_INVALID_LINE_NUMBER;
+  uint32_t column = LLDB_INVALID_COLUMN_NUMBER;
+};
+
+CallSiteLocation GetOutermostInlinedCallSite(lldb::SBAddress addr);
 
 lldb::SBLineEntry GetLineEntryForAddress(lldb::SBTarget &target, const lldb::SBAddress &address);
 

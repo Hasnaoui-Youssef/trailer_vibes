@@ -5,6 +5,7 @@
 #include <system_error>
 
 #include "dap/dap_error.hpp"
+#include "lldb/API/SBBlock.h"
 #include "lldb/API/SBCommandInterpreter.h"
 #include "lldb/API/SBCommandReturnObject.h"
 #include "lldb/API/SBStream.h"
@@ -54,9 +55,34 @@ std::string GetSBFileSpecPath(const lldb::SBFileSpec &file_spec) {
   return path;
 }
 
+CallSiteLocation GetOutermostInlinedCallSite(lldb::SBAddress addr) {
+  CallSiteLocation call_site;
+  lldb::SBBlock inlined_block = addr.GetBlock().GetContainingInlinedBlock();
+  while (inlined_block.IsValid()) {
+    call_site.file = inlined_block.GetInlinedCallSiteFile();
+    call_site.line = inlined_block.GetInlinedCallSiteLine();
+    call_site.column = inlined_block.GetInlinedCallSiteColumn();
+    lldb::SBBlock parent = inlined_block.GetParent();
+    inlined_block = parent.IsValid() ? parent.GetContainingInlinedBlock() : lldb::SBBlock();
+  }
+  return call_site;
+}
+
 lldb::SBLineEntry GetLineEntryForAddress(lldb::SBTarget &target, const lldb::SBAddress &address) {
   lldb::SBSymbolContext sc = target.ResolveSymbolContextForAddress(address, lldb::eSymbolContextLineEntry);
-  return sc.GetLineEntry();
+  lldb::SBLineEntry line_entry = sc.GetLineEntry();
+
+  // Address-based lookups (unlike a frame's own GetLineEntry()) should
+  // reflect the outer call site, not an inlined callee's innermost row.
+  CallSiteLocation call_site = GetOutermostInlinedCallSite(address);
+  if (call_site.file.IsValid()) {
+    line_entry.SetFileSpec(call_site.file);
+    if (call_site.line != LLDB_INVALID_LINE_NUMBER)
+      line_entry.SetLine(call_site.line);
+    if (call_site.column != LLDB_INVALID_COLUMN_NUMBER)
+      line_entry.SetColumn(call_site.column);
+  }
+  return line_entry;
 }
 
 lldb::StopDisassemblyType GetStopDisassemblyDisplay(lldb::SBDebugger &debugger) {

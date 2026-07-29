@@ -23,12 +23,15 @@ public:
   void SetBreakpoint();
 
 protected:
+  /// Disables locations not on a decoded instruction (e.g. a literal pool
+  /// aliased onto the same line), so they aren't forced to hardware too.
+  void PruneNonCodeLocations();
+
   /// The LLDB breakpoint associated wit this source breakpoint.
   lldb::SBBreakpoint m_bp;
 
-  /// Set if SetBreakpoint() failed to make m_bp a hardware breakpoint (e.g.
-  /// no free FPB comparators). Not necessarily fatal - only matters if the
-  /// address turns out to be in flash, which isn't known here yet.
+  /// Set if SetBreakpoint() couldn't make m_bp hardware (e.g. no free FPB
+  /// comparators); only matters if the address is actually in flash.
   std::string m_hardware_error;
 };
 

@@ -52,7 +52,8 @@ llvm::Error SourceBreakpoint::SetBreakpoint(const protocol::Source &source) {
         return error;
     }
   } else {
-    CreatePathBreakpoint(source);
+    if (llvm::Error error = CreatePathBreakpoint(source))
+      return error;
   }
 
   if (!m_log_message.empty())
@@ -69,11 +70,16 @@ void SourceBreakpoint::UpdateBreakpoint(const SourceBreakpoint &request_bp) {
   BreakpointBase::UpdateBreakpoint(request_bp);
 }
 
-void SourceBreakpoint::CreatePathBreakpoint(const protocol::Source &source) {
+llvm::Error SourceBreakpoint::CreatePathBreakpoint(const protocol::Source &source) {
   const auto source_path = source.path.value_or("");
+  lldb::SBFileSpec file_spec(source_path.c_str(), /*resolve=*/true);
   lldb::SBFileSpecList module_list;
-  m_bp = m_context.Target().BreakpointCreateByLocation(source_path.c_str(), m_line,
-                                                        m_column, 0, module_list);
+  m_bp = m_context.Target().BreakpointCreateByLocation(file_spec, m_line, m_column, 0, module_list,
+                                                        /*move_to_nearest_code=*/true);
+  if (m_bp.GetNumLocations() == 0)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "No code found at %s:%u", source_path.c_str(), m_line);
+  return llvm::Error::success();
 }
 
 llvm::Error SourceBreakpoint::CreateAssemblyBreakpointWithSourceReference(

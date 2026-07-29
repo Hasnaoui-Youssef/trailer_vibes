@@ -53,6 +53,7 @@ public:
   llvm::Error CreateTrace();
   TraceManager *Trace() { return trace_manager_.get(); }
   void ShutdownTrace();
+  dap::protocol::TraceStatusResponseBody TraceStatus();
 
   EventBus &Events() { return event_bus_; }
   void SendOutput(OutputCategory category, llvm::StringRef text);
@@ -147,6 +148,7 @@ private:
   // unsubscribes from the OpenOCD capture callback, which must happen
   // before disassembly_manager_ (and everything else above) is torn down.
   std::unique_ptr<TraceManager> trace_manager_;
+  std::string trace_unavailable_reason_;
 };
 
 }  // namespace core

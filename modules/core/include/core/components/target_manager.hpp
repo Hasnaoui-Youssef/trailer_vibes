@@ -35,6 +35,7 @@ public:
 
   void SetConfiguration(const dap::protocol::Configuration &config, bool is_attach);
   void ConfigureSourceMaps();
+  llvm::Error ConfigureHardwareBreakpointRequirement();
 
   lldb::SBTarget CreateTarget(lldb::SBError &error);
   void SetTarget(lldb::SBTarget target);

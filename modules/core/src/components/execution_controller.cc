@@ -299,7 +299,8 @@ llvm::Error ExecutionController::StepIn(const protocol::StepInArguments &args) {
     step_in_target = it->second;
 
   lldb::RunMode run_mode = args.singleThread ? lldb::eOnlyThisThread : lldb::eOnlyDuringStepping;
-  thread.StepInto(step_in_target.c_str(), LLDB_INVALID_LINE_NUMBER, error, run_mode);
+  thread.StepInto(step_in_target.empty() ? nullptr : step_in_target.c_str(), LLDB_INVALID_LINE_NUMBER, error,
+                   run_mode);
   return ToError(error);
 }
 
@@ -582,6 +583,8 @@ static protocol::StoppedEventBody CreateThreadStoppedEvent(DebugContext &context
     if (thread.GetStopDescription(description, sizeof(description)))
       body.description = std::string(description);
   }
+  if (body.description && body.description->find("Could not create hardware breakpoint") != std::string::npos)
+    body.description = "No hardware breakpoints left. Remove a breakpoint and try again.";
   // "threadCausedFocus" is used in tests to validate breaking behavior.
   if (tid == context.Execution().focus_tid)
     body.threadCausedFocus = true;
