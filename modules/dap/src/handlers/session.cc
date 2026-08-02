@@ -186,6 +186,30 @@ private:
         orchestrator_.Send(dap::protocol::Event{"trailerWatchState", llvm::json::Value(std::move(body))});
     }
 
+    void HandleDomainEvent(const core::PeripheralWatchDataEvent &event) {
+        llvm::json::Array registers;
+        for (const core::RegisterValue &reg : event.registers)
+            registers.push_back(llvm::json::Object{{"name", reg.name}, {"value", reg.value}});
+        orchestrator_.Send(dap::protocol::Event{
+            "trailerPeripheralData",
+            llvm::json::Object{
+                {"watchId", event.watch_id},
+                {"sequence", event.sequence},
+                {"epoch", event.epoch},
+                {"registers", std::move(registers)},
+            }});
+    }
+
+    void HandleDomainEvent(const core::PeripheralWatchStateEvent &event) {
+        llvm::json::Object body{
+            {"watchId", event.watch_id},
+            {"state", event.active ? "active" : "error"},
+        };
+        if (!event.detail.empty())
+            body["detail"] = event.detail;
+        orchestrator_.Send(dap::protocol::Event{"trailerPeripheralState", llvm::json::Value(std::move(body))});
+    }
+
     void HandleDomainEvent(const core::TraceDataEvent &event) {
         llvm::Expected<const disasm::ProgramDisassembler &> program = context_.Disassembly().Program();
         const disasm::ProgramDisassembler *program_ptr = nullptr;

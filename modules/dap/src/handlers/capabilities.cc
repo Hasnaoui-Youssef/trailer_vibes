@@ -29,6 +29,7 @@ protocol::Capabilities AssembleCustomCapabilities(Orchestrator &orchestrator) {
         protocol::eAdapterFeatureSupportsModuleSymbolsRequest,
         protocol::eAdapterFeatureSupportsTraceRequests,
         protocol::eAdapterFeatureSupportsWatchRequests,
+        protocol::eAdapterFeatureSupportsPeripheralRequests,
     };
     for (const protocol::AdapterFeature &feature : orchestrator.AggregatedHandlerFeatures()) {
         if (all_custom_features.contains(feature)) {

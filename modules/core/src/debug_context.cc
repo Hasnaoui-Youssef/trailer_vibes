@@ -2,6 +2,7 @@
 
 #include "core/components/breakpoint_manager.hpp"
 #include "core/components/data_manager.hpp"
+#include "core/components/device_manager.hpp"
 #include "core/components/disassembly_manager.hpp"
 #include "core/components/execution_controller.hpp"
 #include "core/components/exception_breakpoint.hpp"
@@ -28,7 +29,8 @@ DebugContext::DebugContext()
       data_manager_(std::make_unique<DataManager>(*this)),
       execution_controller_(std::make_unique<ExecutionController>(*this)),
       target_manager_(std::make_unique<TargetManager>(*this)),
-      watch_manager_(std::make_unique<WatchManager>(*this)) {}
+      watch_manager_(std::make_unique<WatchManager>(*this)),
+      device_manager_(std::make_unique<DeviceManager>(*this)) {}
 
 // Defined here (not defaulted in the header) because BreakpointManager,
 // MemoryManager, DisassemblyManager, ModuleManager, DataManager,

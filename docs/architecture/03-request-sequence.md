@@ -1,41 +1,51 @@
 # Request sequence
 
-One request, wire to wire. Dispatch is single-threaded: `Orchestrator::Run`
-reads one frame, fully handles it (response included), then reads the next
-(`orchestrator.cc:40-57`). The API mutex is never taken on this path itself -
-only inside individual `core` methods, inconsistently (see note below and
-`05-limitations.md` #1).
+Dispatch is a reader thread and a dispatch thread, not one thread reading
+and handling in lockstep. `Orchestrator::Run()` starts `ReaderLoop` on its
+own thread and runs `DispatchLoop` on the caller's:
+
+- **`ReaderLoop`**: blocks on `Transport::ReadMessage()`, decodes each frame
+  into a `protocol::Request`, and pushes it onto a queue. A `cancel` request
+  is handled specially here, before it's even enqueued: its target request
+  ID is inserted into `cancelled_requests_` immediately, so a request still
+  sitting in the queue (or already dispatched) can observe cancellation
+  without waiting for the `cancel` message itself to reach the front of the
+  queue.
+- **`DispatchLoop`**: pops one request at a time and calls `HandleRequest`,
+  which looks it up in `command_handlers_` and calls `Run`. Still exactly
+  one dispatch thread - handler bodies never run concurrently with each
+  other - but reading and dispatching are no longer serialized against each
+  other the way they used to be.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Transport
-    participant Orchestrator
+    participant Reader as ReaderLoop (own thread)
+    participant Dispatch as DispatchLoop
     participant BaseHandler as BaseRequestHandler
     participant Handler as RequestHandler<Args,Resp>
-    participant Core as core:: (manager or raw SB API)
+    participant Core as core:: (manager, or raw SB API in a few handlers)
 
     Client->>Transport: Content-Length frame
-    Transport->>Orchestrator: ReadMessage() (transport.cc:48)
-    Orchestrator->>Orchestrator: fromJSON -> protocol::Request (orchestrator.cc:47-53)
-    Orchestrator->>Orchestrator: HandleRequest (:59), active_request_ bookkeeping (:64-71)
-    Orchestrator->>BaseHandler: command_handlers_[cmd]->Run(request) (:77-79)
-    BaseHandler->>Orchestrator: IsCancelled(request)? (request_handler.cc:42)
+    Transport->>Reader: ReadMessage()
+    Reader->>Reader: fromJSON -> protocol::Request
+    Reader->>Reader: if command == "cancel": mark cancelled_requests_ now
+    Reader->>Dispatch: push onto request_queue_, notify
+    Dispatch->>BaseHandler: command_handlers_[cmd]->Run(request)
+    BaseHandler->>Dispatch: IsCancelled(request)?
     alt cancelled
-        BaseHandler->>Orchestrator: Send(cancelled response)
+        BaseHandler->>Dispatch: Send(cancelled response)
     else not cancelled
-        BaseHandler->>BaseHandler: CancelInterruptRequest() (:52)
-        BaseHandler->>Handler: operator()(request) (:58, no lock taken here)
-        Handler->>Handler: parseArgs<Args>(request) (request_handler.hpp:116)
-        Handler->>Core: Run(*arguments) - virtual dispatch (:121/:126)
-        Note over Core: clean path: ONE core method,<br/>locks GetAPIMutex internally<br/>(inconsistently - see note)
-        Note over Core: fat-handler path: handler body<br/>drives lldb::SB* directly, unlocked
+        BaseHandler->>Handler: operator()(request)
+        Handler->>Handler: parseArgs<Args>(request)
+        Handler->>Core: Run(*arguments) - virtual dispatch
+        Note over Core: most methods: WithTarget(callable)<br/>- one encapsulated critical section
+        Note over Core: a handful of handlers still drive<br/>lldb::SB* directly in the handler body
         Core-->>Handler: llvm::Expected<ResponseBody> or Error
-        Handler->>BaseHandler: SendSuccess/SendError (:124/:130)
-        BaseHandler->>BaseHandler: IsInterruptRequested()? mark cancelled (request_handler.cc:174-178)
-        BaseHandler->>Orchestrator: Send(response)
-        Orchestrator->>Orchestrator: assign seq under send_mutex_ (:92-102)
-        Orchestrator->>Transport: WriteMessage
+        Handler->>BaseHandler: SendSuccess/SendError
+        BaseHandler->>Dispatch: Send(response)
+        Dispatch->>Transport: WriteMessage
         Transport->>Client: Content-Length frame
     end
 ```
@@ -43,47 +53,50 @@ sequenceDiagram
 ## Deferred response: launch/attach
 
 `launch` and `attach` use `DelayedResponseRequestHandler` instead of
-`RequestHandler`:
+`RequestHandler`, since the DAP spec expects `initialized` (and the
+client's follow-up breakpoint/configuration requests) to happen *between*
+the request and its response:
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Orchestrator
+    participant Dispatch
     participant LaunchHandler as DelayedResponseRequestHandler
     participant ConfigDone as ConfigurationDoneRequestHandler
 
-    Client->>Orchestrator: launch request
-    Orchestrator->>LaunchHandler: Run -> operator()
+    Client->>Dispatch: launch request
     LaunchHandler->>LaunchHandler: Run(*arguments) (builds response, not sent yet)
-    LaunchHandler->>Orchestrator: SetDeferredConfigurationResponse(fn) (request_handler.hpp:168)
-    LaunchHandler->>Orchestrator: Send(Event{"initialized"}) (:173-174)
-    Client->>Orchestrator: (breakpoints etc, then) configurationDone request
-    Orchestrator->>ConfigDone: Run -> operator() -> Run(args) -> PostRun()
-    ConfigDone->>Orchestrator: RunDeferredConfigurationResponse() (configuration_done_request_handler.cc:41)
-    Orchestrator->>Client: launch response (finally sent)
+    LaunchHandler->>Dispatch: SetDeferredConfigurationResponse(fn)
+    LaunchHandler->>Dispatch: Send(Event{"initialized"})
+    Client->>Dispatch: (breakpoints etc, then) configurationDone request
+    ConfigDone->>ConfigDone: Run(args) -> PostRun()
+    ConfigDone->>Dispatch: RunDeferredConfigurationResponse()
+    Dispatch->>Client: launch response (finally sent)
 ```
 
-## The API-mutex gap on this path
+`launch` additionally embeds OpenOCD in-process at this point
+(`DebugContext::CreateOpenOcd`, called from `TargetManager::Launch`) - this
+is what backs memory/peripheral watches and instruction-trace capture for
+the rest of the session. `attach` never creates one; features that need
+`context.OpenOcd()` are unavailable under `attach`.
 
-`BaseRequestHandler::Run`'s own comment states the contract:
-"No API-mutex lock here: every core method a handler calls below (via
-`operator()`) locks internally for its own duration"
-(`request_handler.cc:54-57`). This holds for most `core` managers (the
-`GetAPIMutex`/`lock_guard` idiom repeated per method, `05-limitations.md`
-#4), but is violated in two independent ways:
+## The locking picture on this path
 
-1. Fat handlers (`variables`, `evaluate`, `scopes`, `stackTrace`, `threads`,
-   most `symbols/*`) skip `core` methods for their SB traversal and touch
-   `lldb::SB*` directly in the handler body - no lock exists at any level for
-   that code. Example: `scopes_request_handler.cc:18`
-   `lldb::SBFrame frame = context_.GetLLDBFrame(args.frameId);` - unlocked
-   both in `GetLLDBFrame` (`debug_context.cc:52-58`, no lock) and in the
-   handler using the returned frame.
-2. Even a "clean delegator" can reach an unlocked `core` method:
-   `MemoryManager`/`ProcessMemoryStrategy::Read`/`Write`
-   (`memory_manager.cc:13-70`) never take `GetAPIMutex` at all, and
-   `read_memory_request_handler.cc:24`
-   (`lldb::SBProcess process = context_.Target().GetProcess();`) reads the
-   target directly in the handler, also unlocked. "Delegates to one core
-   method" is not, on its own, evidence of safety - see
-   `05-limitations.md` #1.
+`BaseRequestHandler::Run` takes no lock itself - every `core` method a
+handler calls is expected to lock for its own duration via
+`LldbProvider::WithTarget`, not the caller. This holds cleanly for the
+methods that actually route through `WithTarget` (most of `core`'s manager
+methods, `~15` source files at last count).
+
+It does **not** hold for two specific accessors and the handlers that use
+them: `DebugContext::GetLLDBThread`/`GetLLDBFrame` call
+`SBProcess`/`SBThread` methods directly, with no `WithTarget` wrapper - and
+several handlers (`variables`, `evaluate`, `scopes`, `stackTrace`,
+`threads`, most of `symbols/*`) call one of those two accessors and then
+keep driving the returned `SBThread`/`SBFrame` themselves. This is the one
+real carryover from the pre-`WithTarget` locking review: the redesign made
+locking for participating code encapsulated and impossible to get wrong,
+but it didn't close this specific pre-existing gap, because closing it
+means moving the SB traversal those handlers do out of the handler and into
+a `core` method in the first place - a larger change than the locking
+redesign itself. See `05-known-characteristics.md`.

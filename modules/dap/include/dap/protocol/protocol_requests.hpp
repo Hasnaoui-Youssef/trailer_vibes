@@ -96,7 +96,12 @@ struct Configuration {
 
   // Forces LLDB's internal thread-plan breakpoints to hardware too, not just
   // user breakpoints - a software one is a silent no-op on flash targets.
-  bool requireHardwareBreakpoints = true;
+  // Unset (rather than defaulting true) so Breakpoint::SetBreakpoint() can
+  // tell "user explicitly chose" from "let the device memory map decide".
+  std::optional<bool> requireHardwareBreakpoints;
+
+  std::string deviceName;
+  std::string svdPath;
 
   std::chrono::seconds timeout = std::chrono::seconds(30);
   std::string commandEscapePrefix = "`";
@@ -684,6 +689,158 @@ struct TrailerWatchStopArguments {
 };
 bool fromJSON(const llvm::json::Value &, TrailerWatchStopArguments &, llvm::json::Path);
 using TrailerWatchStopResponse = VoidResponse;
+
+struct TrailerMemoryRegion {
+    std::string name;
+    addr_t start = 0;
+    uint64_t size = 0;
+    bool readable = false;
+    bool writable = false;
+    bool executable = false;
+    // "ram" | "rom" | "external"
+    std::string kind;
+};
+llvm::json::Value toJSON(const TrailerMemoryRegion &);
+
+struct TrailerPeripheralSummary {
+    std::string name;
+    std::string description;
+    std::string groupName;
+    addr_t baseAddress = 0;
+    uint64_t addressBlockSize = 0;
+    uint64_t registerCount = 0;
+};
+llvm::json::Value toJSON(const TrailerPeripheralSummary &);
+
+using TrailerDeviceInfoArguments = EmptyArguments;
+
+struct TrailerDeviceInfoResponseBody {
+    std::string deviceName;
+    // The bundled architecture (Cortex-Mx) SVD's device name, not this
+    // device's - empty when the device isn't covered by the CubeMX Rzone
+    // database.
+    std::string core;
+    std::vector<TrailerMemoryRegion> memoryRegions;
+    std::vector<TrailerPeripheralSummary> peripherals;
+    // Peripherals from the bundled architecture SVD (NVIC, SCB, DWT, ...),
+    // not the user-supplied device SVD - see the `core` arg on the
+    // per-peripheral requests below.
+    std::vector<TrailerPeripheralSummary> corePeripherals;
+};
+llvm::json::Value toJSON(const TrailerDeviceInfoResponseBody &);
+
+struct TrailerPeripheralDetailArguments {
+    std::string peripheral;
+    bool core = false;
+};
+bool fromJSON(const llvm::json::Value &, TrailerPeripheralDetailArguments &, llvm::json::Path);
+
+struct TrailerEnumeratedValue {
+    std::string name;
+    std::string description;
+    std::optional<uint32_t> value;
+    bool isDefault = false;
+};
+llvm::json::Value toJSON(const TrailerEnumeratedValue &);
+
+struct TrailerRegisterField {
+    std::string name;
+    std::string description;
+    uint32_t bitOffset = 0;
+    uint32_t bitWidth = 0;
+    // "read-only" | "write-only" | "read-write" | "write-once" |
+    // "read-write-once" | "unspecified"
+    std::string access;
+    // "" | "clear" | "set" | "modify" | "modify-external"
+    std::string readAction;
+    std::vector<TrailerEnumeratedValue> enumeratedValues;
+};
+llvm::json::Value toJSON(const TrailerRegisterField &);
+
+struct TrailerRegister {
+    std::string name;
+    std::string description;
+    uint32_t addressOffset = 0;
+    uint32_t sizeBits = 32;
+    std::string access;
+    std::string readAction;
+    bool readSafe = true;
+    std::optional<uint32_t> resetValue;
+    std::optional<uint32_t> resetMask;
+    std::vector<TrailerRegisterField> fields;
+};
+llvm::json::Value toJSON(const TrailerRegister &);
+
+struct TrailerInterrupt {
+    std::string name;
+    std::string description;
+    int32_t value = 0;
+};
+llvm::json::Value toJSON(const TrailerInterrupt &);
+
+struct TrailerPeripheralDetailResponseBody {
+    std::string name;
+    std::string description;
+    std::string groupName;
+    addr_t baseAddress = 0;
+    uint64_t addressBlockOffset = 0;
+    uint64_t addressBlockSize = 0;
+    std::vector<TrailerRegister> registers;
+    std::vector<TrailerInterrupt> interrupts;
+};
+llvm::json::Value toJSON(const TrailerPeripheralDetailResponseBody &);
+
+struct TrailerPeripheralReadArguments {
+    std::string peripheral;
+    bool safeOnly = true;
+    bool core = false;
+};
+bool fromJSON(const llvm::json::Value &, TrailerPeripheralReadArguments &, llvm::json::Path);
+
+struct TrailerRegisterReadEntry {
+    std::string registerName;
+    uint32_t value = 0;
+};
+llvm::json::Value toJSON(const TrailerRegisterReadEntry &);
+
+struct TrailerPeripheralReadResponseBody {
+    std::vector<TrailerRegisterReadEntry> registers;
+};
+llvm::json::Value toJSON(const TrailerPeripheralReadResponseBody &);
+
+struct TrailerPeripheralWriteArguments {
+    std::string peripheral;
+    std::string registerName;
+    uint32_t value = 0;
+    bool core = false;
+};
+bool fromJSON(const llvm::json::Value &, TrailerPeripheralWriteArguments &, llvm::json::Path);
+
+struct TrailerPeripheralWriteResponseBody {
+    // Absent when the register isn't read-safe - no read-back was
+    // attempted.
+    std::optional<uint32_t> value;
+};
+llvm::json::Value toJSON(const TrailerPeripheralWriteResponseBody &);
+
+struct TrailerPeripheralWatchStartArguments {
+    std::string peripheral;
+    uint64_t intervalMs = 500;
+    bool safeOnly = true;
+    bool core = false;
+};
+bool fromJSON(const llvm::json::Value &, TrailerPeripheralWatchStartArguments &, llvm::json::Path);
+
+struct TrailerPeripheralWatchStartResponseBody {
+    int64_t watchId = 0;
+};
+llvm::json::Value toJSON(const TrailerPeripheralWatchStartResponseBody &);
+
+struct TrailerPeripheralWatchStopArguments {
+    int64_t watchId = 0;
+};
+bool fromJSON(const llvm::json::Value &, TrailerPeripheralWatchStopArguments &, llvm::json::Path);
+using TrailerPeripheralWatchStopResponse = VoidResponse;
 
 using UnknownArguments = EmptyArguments;
 using UnknownResponseBody = VoidResponse;

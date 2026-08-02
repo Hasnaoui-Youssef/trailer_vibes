@@ -35,6 +35,7 @@ class ExecutionController;
 class TargetManager;
 class TraceManager;
 class WatchManager;
+class DeviceManager;
 
 class DebugContext {
 public:
@@ -78,6 +79,7 @@ public:
   // Named Session(), not Target(): Target() already returns lldb::SBTarget&.
   TargetManager &Session() { return *target_manager_; }
   WatchManager &Watch() { return *watch_manager_; }
+  DeviceManager &Device() { return *device_manager_; }
 
   lldb::SBThread GetLLDBThread(lldb::tid_t tid);
   lldb::SBFrame GetLLDBFrame(uint64_t dap_frame_id);
@@ -155,10 +157,11 @@ private:
   std::unique_ptr<DataManager> data_manager_;
   std::unique_ptr<ExecutionController> execution_controller_;
   std::unique_ptr<TargetManager> target_manager_;
-  // watch_manager_ and trace_manager_ are declared last (destroy first):
-  // both own threads that call into openocd_provider_, which must not go
-  // away while either is still running.
+  // watch_manager_, device_manager_ and trace_manager_ are declared last
+  // (destroy first): all own threads that call into openocd_provider_,
+  // which must not go away while any of them is still running.
   std::unique_ptr<WatchManager> watch_manager_;
+  std::unique_ptr<DeviceManager> device_manager_;
   // Its destructor synchronously unsubscribes from the OpenOCD capture
   // callback, which must happen before disassembly_manager_ (and
   // everything else above) is torn down.

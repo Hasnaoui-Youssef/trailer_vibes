@@ -1,99 +1,94 @@
 # Modules and layers
 
 Link DAG extracted from CMake (`target_link_libraries`), verified against
-source. A -> B means A links B.
+source.
 
 ```mermaid
 graph TD
     trailer_dap["trailer-dap (exe)"] --> dap_core
-    trailer_dap --> debug_service
     trailer_dap --> dap_handlers
 
     dap_handlers --> dap_core
-    dap_handlers --> debug_service
     dap_handlers --> core
-
-    debug_service --> dap_core
-    debug_service --> common
-    debug_service --> lldb_provider
-    debug_service --> core
 
     dap_core --> dap_protocol
 
     core --> lldb_provider
+    core --> openocd_provider
+    core --> device_provider
+    core --> disassembler
+    core --> trace_provider
     core --> dap_protocol
 
     dap_protocol --> LLVMSupport
     dap_protocol --> common
 
-    common --> LLVMSupport
+    device_provider --> device_xml
+    device_xml --> XercesC
 
     lldb_provider --> LLDB_liblldb["LLDB::liblldb"]
+    openocd_provider --> openocd["openocd (embedded, in-process)"]
+
+    common --> LLVMSupport
 
     style dap_protocol fill:#2d5,stroke:#333
     style dap_core fill:#2d5,stroke:#333
     style core fill:#d52,stroke:#333
     style lldb_provider fill:#d52,stroke:#333
-    style debug_service fill:#888,stroke:#333
+    style openocd_provider fill:#d52,stroke:#333
+    style device_xml fill:#d52,stroke:#333
 ```
 
-Green = LLDB-free. Orange = owns/links LLDB directly. Gray = fork remnant,
-scheduled for deletion (see `05-limitations.md` #6).
+Green = LLDB/OpenOCD/Xerces-free. Orange = links one of those three directly.
 
-Acyclic, confirmed: `dap_protocol <- dap_core <- debug_service <-
-dap_handlers`, `dap_protocol <- core <- dap_handlers`
-(`modules/dap/CMakeLists.txt:12-13`, stated in the file's own header
-comment).
+Acyclic, as stated in `modules/dap/CMakeLists.txt`'s own header comment:
+`dap_protocol <- dap_core <- dap_handlers`, `dap_protocol <- core <-
+dap_handlers`. `core` depends on `dap_protocol` (pure wire-format value
+types), never on `dap_core`'s behavioral machinery
+(Transport/Orchestrator/dispatch) - the rationale is that sharing
+`dap_protocol` avoids parallel domain DTOs for every component's result
+shape, while keeping `core` usable without any particular communication
+layer on top of it.
 
 ## Target-to-directory map
 
-| Target | Directory | Sources | LLDB? |
-|---|---|---|---|
-| `dap_protocol` | `modules/dap/` | `src/protocol/*.cc`, `src/protocol_support.cc`, `src/dap_error.cc`, `src/json_utils.cc` | No |
-| `dap_core` | `modules/dap/` | `src/transport.cc`, `src/orchestrator.cc`, `src/dap_log.cc`, `src/response_handler.cc`, `src/progress_event.cc` | No |
-| `debug_service` | `modules/dap/src/debug_service/` | `debug_service.cc`, `lldb_utils.cc` | Yes (fork remnant) |
-| `dap_handlers` | `modules/dap/src/handlers/` | ~40 handler `.cc` files + `session.cc`, `register_handlers.cc`, `capabilities.cc`, `request_handler.cc` | Indirectly, and directly in ~15 handler bodies |
-| `core` | `modules/core/` | `debug_context.cc`, `variable_description.cc`, `lldb_utils.cc`, `components/*.cc` | Yes |
-| `lldb_provider` | `modules/providers/lldb_provider/` | header-only (`INTERFACE` library, no `.cc`) | Yes (owns `LLDB::liblldb`) |
+| Target | Directory | What it is |
+|---|---|---|
+| `dap_protocol` | `modules/dap/` | Wire-format value types + JSON conversion (`src/protocol/*.cc`, `protocol_support.cc`, `dap_error.cc`, `json_utils.cc`). LLDB-free: the `lldb::`-shaped ID typedefs the wire structs use are plain fixed-width types + local macros (`dap/protocol/dap_defines.hpp`); `Symbol.type` is `dap_protocol`'s own `SymbolType` enum, not `lldb::SymbolType` - `core`/providers convert at the boundary. |
+| `dap_core` | `modules/dap/` | `Transport`, `Orchestrator`, generic request dispatch (`src/transport.cc`, `orchestrator.cc`, `dap_log.cc`, `response_handler.cc`, `progress_event.cc`). |
+| `dap_handlers` | `modules/dap/src/handlers/` | ~48 concrete request handlers across 10 domain subdirectories (`breakpoints/`, `disassembly/`, `execution/`, `inspection/`, `lifecycle/`, `memory/`, `peripheral/`, `symbols/`, `trace/`, `watch/`), plus `session.cc` (the sole `EventBus` subscriber, translates `DomainEvent` to wire `Event`s), `register_handlers.cc`, `capabilities.cc`, `request_handler.{hpp,cc}`, `unknown_request_handler.cc`. |
+| `core` | `modules/core/` | `DebugContext` + 10 domain components (`debug_context.cc`, `variable_description.cc`, `lldb_utils.cc`, `components/*.cc`). The only layer that names `lldb::`/OpenOCD/device-provider types below `dap_handlers`. |
+| `lldb_provider` | `modules/providers/lldb_provider/` | Header-only (`INTERFACE` library). Owns `SBDebugger`/`SBTarget`, exposes `WithTarget(callable)` as the sole synchronized-access seam. |
+| `openocd_provider` | `modules/providers/openocd_provider/` | Embeds OpenOCD as a library, in-process - no subprocess, no external `openocd` binary at `launch` time. Owns the TCL command dispatch thread, memory access, and trace-sink/source extraction. |
+| `device_provider` | `modules/providers/device_provider/` | STM32 device/peripheral truth: CubeMX-derived memory maps (`device_index.cc`, `rzone_parser.cc`, `memory_map.cc`), executable-relative resource resolution (`resource_paths.cc`), a facade (`device_pack.cc`). Links `device_xml` (see below). |
+| `device_xml` | `modules/providers/device_provider/xml/` | Isolated RTTI/exceptions island: CMSIS-SVD parsing via CodeSynthesis XSD-generated C++/Tree bindings, links Xerces-C. Exposes only `svd_model.hpp` (plain structs) - nothing downstream needs RTTI or Xerces because it links this target. |
+| `disassembler` | `modules/providers/disassembler/` | LLVM-MC-based disassembly, independent of LLDB (per `CLAUDE.md`'s design goal). |
+| `trace_provider` | `modules/providers/trace/trace_provider/` | Instruction-trace pipeline facade over `trace_decoder` (OpenCSD-based ETMv4 decode), `trace_sink`, `trace_model`, `trace_transform`. |
 
-Anchors: `modules/dap/CMakeLists.txt:34-43` (`dap_protocol`), `:68-74`
-(`dap_core`), `:99-117` (`debug_service`), `:125-189` (`dap_handlers`);
-`modules/core/CMakeLists.txt:12-40` (`core`);
-`modules/providers/lldb_provider/CMakeLists.txt:3,17-19` (`lldb_provider`,
-`add_library(lldb_provider INTERFACE)`).
+## RTTI/exceptions boundary
 
-## Real LLDB boundary vs stated boundary
+LLVM/LLDB are built `-fno-rtti`; `core` and everything under it compiles
+`-fno-rtti` too (`core/CMakeLists.txt`), except two deliberately isolated
+islands that need RTTI/exceptions and are walled off so it never leaks:
 
-`dap_protocol` and `dap_core` are genuinely LLDB-free - every `lldb::` grep
-hit in those directories is a comment, not code (e.g.
-`include/dap/protocol/dap_types.hpp:26,62` are prose references, not
-`#include`s). This half of the stated boundary holds.
+- `device_xml` (Xerces-C + the generated CMSIS-SVD tree) - `-frtti` is
+  `PRIVATE` on this one target specifically, so it affects only its own
+  translation units, not `device_provider` or anything above it.
+- OpenCSD (linked by `trace_decoder`, pulled in via `trace_provider`) needs
+  RTTI for the same reason - `lldb_provider` is never linked into a
+  translation unit that also touches OpenCSD.
 
-`dap_handlers` is documented as "the only thing allowed to know about a
-specific service" (`modules/dap/CMakeLists.txt:119-124`), meaning it may
-depend on `debug_service`/`core` at the *target* level. In practice this
-license extends past dependency and into direct SB API use inside handler
-bodies: ~15 handler `.cc` files construct and drive `lldb::SBThread`,
-`SBFrame`, `SBValue`, `SBProcess` etc. directly, rather than only calling
-into `core` methods. See `05-limitations.md` #1-2 for the handler-by-handler
-breakdown.
+## What's gone
 
-## debug_service: not yet deleted
+**`debug_service`** - the half-absorbed `lldb-dap` fork remnant this
+document set used to spend most of its length on - has been deleted
+entirely: no target, no directory, no `#include`. The domain logic it used
+to hold lives in `core`'s components now. (A stale `clangd` index cache
+still has entries for it; that's a cache artifact, not source.)
 
-Target still defined and linked (`modules/dap/CMakeLists.txt:99-117`, linked
-by `trailer-dap` at `engine/CMakeLists.txt:98` and by `dap_handlers` at
-`modules/dap/CMakeLists.txt:187`). 21 handler files still
-`#include "debug_service/..."` headers for leftover free-function helpers
-(`variables.hpp`, `json_utils.hpp`, `lldb_utils.hpp`). The module's own
-CMakeLists comment (`:86-90`) calls it "transitional... meant to be absorbed
-into a future DebugContext/component layer rather than live on indefinitely."
-Detail in `05-limitations.md` #6.
-
-## Stale cross-reference
-
-`modules/dap/CMakeLists.txt:178-180` claims `dap_main.cc` needs
-`DebugServiceSession`, declared in a `dap/debug_service_factory.hpp`. Neither
-symbol nor file exists in source (`grep` finds zero hits; only a stale
-`clangd` index cache entry remains). The real seam is `dap::Session` /
-`dap::CreateSession` in `dap/session.hpp` (`src/dap_main.cc:18,42`). The
-comment predates a rename and was never updated.
+**The `trailer` trace-analysis CLI** - a second executable that used to
+link `disassembler`/`trace_provider`/etc. independently of `trailer-dap` -
+is gone too. The trace pipeline is now a `core` dependency
+(`core -> trace_provider`), driven live through `TraceManager` and the
+`trailerTrace*` DAP requests, not run offline against a captured snapshot
+file.

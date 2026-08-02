@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/components/device_manager.hpp"
 #include "core/components/disassembly_manager.hpp"
 #include "core/components/execution_controller.hpp"
 #include "core/components/memory_manager.hpp"
@@ -72,6 +73,8 @@ void TargetManager::SetConfiguration(const dap::protocol::Configuration &config,
     m_context.SetFrameFormat(*configuration.customFrameFormat);
   if (configuration.customThreadFormat)
     m_context.SetThreadFormat(*configuration.customThreadFormat);
+
+  m_context.Device().Configure(config.deviceName, config.svdPath);
 }
 
 void TargetManager::ConfigureSourceMaps() {
@@ -92,7 +95,7 @@ void TargetManager::ConfigureSourceMaps() {
 
 llvm::Error TargetManager::ConfigureHardwareBreakpointRequirement() {
   std::string command = llvm::formatv("settings set target.require-hardware-breakpoint {0}",
-                                       configuration.requireHardwareBreakpoints ? "true" : "false")
+                                       configuration.requireHardwareBreakpoints.value_or(true) ? "true" : "false")
                              .str();
   if (!RunLLDBCommands("Setting hardware breakpoint requirement:", {command}))
     return CreateRunLLDBCommandsErrorMessage("hardware breakpoint requirement");
@@ -158,6 +161,7 @@ llvm::Error TargetManager::Disconnect(bool terminate_debuggee) {
   // any live memory watch worker still reading through it.
   m_context.ShutdownTrace();
   m_context.Watch().StopAll();
+  m_context.Device().StopAllPeripheralWatches();
   // Only after LLDB is done talking to it over gdb-remote (the kill/detach
   // above, and the event thread it could still trigger) - shutting OpenOCD
   // down any earlier pulls the connection out from under that traffic.

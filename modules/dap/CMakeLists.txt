@@ -131,6 +131,14 @@ add_library(dap_handlers
         src/handlers/watch/watch_start_request_handler.cc
         src/handlers/watch/watch_stop_request_handler.cc
 
+        src/handlers/peripheral/peripheral_translation.cc
+        src/handlers/peripheral/device_info_request_handler.cc
+        src/handlers/peripheral/peripheral_detail_request_handler.cc
+        src/handlers/peripheral/peripheral_read_request_handler.cc
+        src/handlers/peripheral/peripheral_write_request_handler.cc
+        src/handlers/peripheral/peripheral_watch_start_request_handler.cc
+        src/handlers/peripheral/peripheral_watch_stop_request_handler.cc
+
         src/handlers/unknown_request_handler.cc
 )
 

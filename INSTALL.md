@@ -18,6 +18,16 @@
   if `find_package(LLVM CONFIG)` doesn't find it unhinted, add an `LLVM_DIR`
   entry to the `windows-msys2-ucrt64` preset in `CMakePresets.json`.
 
+- Xerces-C dev package — linked by `device_provider`'s `device_xml` sublibrary
+  (`modules/providers/device_provider/xml/`), which parses CMSIS-SVD files via
+  CodeSynthesis XSD-generated C++/Tree bindings. Found via CMake's bundled
+  `FindXercesC` module.
+
+  **Ubuntu / Debian:**
+  ```
+  sudo apt install libxerces-c-dev
+  ```
+
 ## Configuring and building
 
 ```
@@ -33,3 +43,25 @@ editing the checked-in file.
 
 Plain `cmake -S . -B build` (no preset) also works wherever LLVM is already on
 CMake's default search path with nothing else to disambiguate.
+
+## Regenerating the CMSIS-SVD bindings
+
+`modules/providers/device_provider/xml/generated/CMSIS_SVD.{hxx,cxx}` are
+generated once by hand from `resources/Schemas/CMSIS_SVD.xsd` and committed —
+this is not a build step, and CodeSynthesis XSD is not a build dependency.
+Only regenerate when that schema changes:
+
+```
+xsd cxx-tree --std c++11 \
+    --hxx-suffix .hxx --cxx-suffix .cxx \
+    --output-dir modules/providers/device_provider/xml/generated/ \
+    resources/Schemas/CMSIS_SVD.xsd
+```
+
+Requires CodeSynthesis XSD (tested with 4.2.0) on `PATH`. The generator
+stamps a version check into every file it produces — it must match whatever
+`xsd/cxx` runtime headers the `xsd` binary you used was built against, or
+generated code fails to compile with `#error XSD runtime version mismatch`.
+`PACK.xsd` and `RZONE.xsd` are not generated — the PDSC and CubeMX Rzone
+files are small and hand-parsed with pugixml instead (see
+`modules/providers/device_provider/src/rzone_parser.cc`).

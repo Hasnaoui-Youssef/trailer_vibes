@@ -82,4 +82,24 @@ target_link_libraries(trailer-dap
     dap_handlers
 )
 
+# device_provider resolves its resources at runtime relative to the
+# executable (see resource_paths.cc), so a shipped binary isn't tied to
+# CMAKE_SOURCE_DIR. Only what's actually read at runtime is copied - not
+# Schemas/ (codegen-time only) or XML/Devices/ (not committed; folded into
+# device_index.tsv by tools/expand_devices.py).
+add_custom_command(TARGET trailer-dap POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:trailer-dap>/resources/XML
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_SOURCE_DIR}/resources/device_index.tsv
+        $<TARGET_FILE_DIR:trailer-dap>/resources/device_index.tsv
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/resources/XML/Cores
+        $<TARGET_FILE_DIR:trailer-dap>/resources/XML/Cores
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/resources/XML/Rzone
+        $<TARGET_FILE_DIR:trailer-dap>/resources/XML/Rzone
+    COMMENT "Copying device resources next to trailer-dap"
+)
+
 target_compile_features(trailer-dap PRIVATE cxx_std_23)

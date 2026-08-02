@@ -54,42 +54,52 @@ is still needed to support the intended debugging experience.
 - A memory read performed by the engine's OpenOCD-backed path and the identical read performed by
   a separate debugger are coherent
 
+## Since resolved
+
+The following were tracked here as not-yet-implemented and are now done -
+kept as a record, not repeated as open items below:
+
+- **Session wiring.** `TargetManager::Launch` constructs the OpenOCD
+  provider (`DebugContext::CreateOpenOcd`) and installs an
+  `OpenOcdMemoryStrategy` as the session's memory backend. `attach` never
+  does this - see `docs/architecture/03-request-sequence.md`.
+- **Device memory region information.** `device_provider` resolves a
+  device's memory layout (RAM/Flash/external regions, with explicit
+  RAM-vs-ROM typing) from the STM32CubeMX database, not a DFP/PDSC - see
+  `docs/architecture/01-modules-and-layers.md`.
+- **Device peripheral register map.** `device_provider`/`device_xml` parse
+  CMSIS-SVD (both a user-supplied device SVD and the bundled architecture
+  SVD) into names, addresses, fields, enumerated values, and aggregated
+  read-safety per register - exposed via `core::DeviceManager` and the
+  `trailerPeripheral*`/`trailerDeviceInfo` DAP requests.
+- **Trace view fed by live hardware capture.** `TraceManager` subscribes to
+  the provider's TMC extraction and decodes on its own worker thread; this
+  is the same live pipeline `trailerTraceEnable`/`trailerTraceData` expose,
+  hardware-verified end to end.
+
 ## Not yet implemented
-
-### Session wiring
-
-- Constructing an OpenOCD provider as part of a debug session, and selecting the memory/trace
-  backend for that session, is not yet wired up.
 
 ### Trace configuration
 
 - Creating a trace sink or trace source at runtime is not implemented.
-  Trace components currently must already exist, created ahead of time through startup configuration.
+  `TraceManager::Create` lists already-configured sinks/sources and uses the
+  first of each; trace components must already exist, created ahead of time
+  through startup configuration (a sourced OpenOCD config script).
 
-### Device memory region information
+### Debug component topology and linker-derived regions
 
-- Extracting a device's memory layout (flash and RAM regions, with their address ranges) from a
-  device family pack description is not implemented.
-- Extracting a device's peripheral register map (names, addresses, and address ranges) from a
-  peripheral description file is not implemented.
-- Extracting debug component topology from a debug description file, where one is available, is not implemented.
-  This description is not always present for a given device and must be treated as optional.
-- Extracting stack and heap region bounds from a linker script is not implemented.
-- A unified memory region model — named regions (flash, RAM, peripherals, stack, heap, and others)
-  with address bounds, populated from the sources above — does not exist yet.
-- Modifying a memory region's bounds, or adding/removing a region, after it has been populated
-  from the sources above, is not implemented.
+- Extracting debug component topology (CoreSight topology - funnels,
+  replicators, etc.) from a debug description file is not implemented. Not
+  always present for a given device, so this must stay optional.
+- Extracting stack and heap region bounds from a linker script is not
+  implemented - `device_provider`'s `MemoryMap` covers RAM/Flash/external
+  regions from the CubeMX database, not stack/heap.
+- Modifying a memory region's bounds, or adding/removing a region, after
+  it's been populated, is not implemented - `MemoryMap` is read-only once
+  built for a session.
 
 ### Region- and AP-scoped memory view
 
-- Selecting a memory access target by AP number alone is not implemented. Today, addressing a
-  specific AP requires naming an OpenOCD target that was already configured to sit on that AP;
-  there is no functionality to address an AP directly without such a target pre-existing.
-
-### Trace view
-
-- Decoding a captured trace buffer into an ordered sequence of executed instructions is not wired
-  to live hardware-captured data; the trace decode pipeline exists independently but is not fed by
-  the provider's trace extraction.
-- Exposing a queryable, ordered trace timeline (instruction address, disassembly, and source
-  correlation per entry) is not implemented.
+- Selecting a memory access target by AP number alone is not implemented.
+  Addressing a specific AP still requires naming an OpenOCD target already
+  configured to sit on that AP.

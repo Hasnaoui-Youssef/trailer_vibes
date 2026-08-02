@@ -333,8 +333,15 @@ enum AdapterFeature : unsigned {
   /// `trailerWatchStop` requests, and emits `trailerWatchData` and
   /// `trailerWatchState` events. These are custom requests of trailer.
   eAdapterFeatureSupportsWatchRequests,
+  /// The debug adapter supports the `trailerDeviceInfo`,
+  /// `trailerPeripheralDetail`, `trailerPeripheralRead`,
+  /// `trailerPeripheralWrite`, `trailerPeripheralWatchStart` and
+  /// `trailerPeripheralWatchStop` requests, and emits
+  /// `trailerPeripheralData` and `trailerPeripheralState` events. These are
+  /// custom requests of trailer.
+  eAdapterFeatureSupportsPeripheralRequests,
   eAdapterFeatureFirst = eAdapterFeatureANSIStyling,
-  eAdapterFeatureLast = eAdapterFeatureSupportsWatchRequests,
+  eAdapterFeatureLast = eAdapterFeatureSupportsPeripheralRequests,
 };
 bool fromJSON(const llvm::json::Value &, AdapterFeature &, llvm::json::Path);
 llvm::json::Value toJSON(const AdapterFeature &);

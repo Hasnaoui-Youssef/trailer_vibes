@@ -30,6 +30,7 @@ add_library(core
         src/components/target_manager.cc
         src/components/trace_manager.cc
         src/components/watch_manager.cc
+        src/components/device_manager.cc
 )
 
 target_include_directories(core PUBLIC
@@ -42,6 +43,7 @@ target_link_libraries(core PUBLIC
     dap_protocol
     disassembler
     trace_provider
+    device_provider
 )
 
 target_compile_options(core PUBLIC

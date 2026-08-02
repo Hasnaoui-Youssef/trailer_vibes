@@ -106,10 +106,35 @@ struct WatchStateEvent {
   std::string detail;
 };
 
+struct RegisterValue {
+  std::string name;
+  uint32_t value;
+};
+
+// A live peripheral watch's periodic poll, already decoded into named
+// register values - see DeviceManager::PeripheralWatchWorkerMain. epoch is
+// the write-generation this data reflects; DeviceManager never emits a
+// frame whose epoch predates a write still in flight, so consumers don't
+// need their own staleness check.
+struct PeripheralWatchDataEvent {
+  int64_t watch_id;
+  uint64_t sequence;
+  uint64_t epoch;
+  std::vector<RegisterValue> registers;
+};
+
+// Fires only on active/error transitions, not on every poll - mirrors
+// WatchStateEvent.
+struct PeripheralWatchStateEvent {
+  int64_t watch_id;
+  bool active;
+  std::string detail;
+};
+
 using DomainEvent = std::variant<OutputEvent, StoppedEvent, ContinuedEvent, ExitedEvent, ThreadExitedEvent,
                                  ProcessEvent, CapabilitiesEvent, InvalidatedEvent, MemoryEvent, ModuleEvent,
                                  BreakpointEvent, TerminatedEvent, TraceDataEvent, ResetEvent, TraceStatusEvent,
-                                 WatchDataEvent, WatchStateEvent>;
+                                 WatchDataEvent, WatchStateEvent, PeripheralWatchDataEvent, PeripheralWatchStateEvent>;
 
 class EventBus {
 public:

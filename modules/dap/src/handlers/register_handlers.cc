@@ -61,6 +61,12 @@ std::vector<std::unique_ptr<BaseRequestHandler>> RegisterDebugHandlers(Orchestra
     Register<WatchStartRequestHandler>(orchestrator, context, handlers);
     Register<WatchStopRequestHandler>(orchestrator, context, handlers);
     Register<WriteMemoryRequestHandler>(orchestrator, context, handlers);
+    Register<DeviceInfoRequestHandler>(orchestrator, context, handlers);
+    Register<PeripheralDetailRequestHandler>(orchestrator, context, handlers);
+    Register<PeripheralReadRequestHandler>(orchestrator, context, handlers);
+    Register<PeripheralWriteRequestHandler>(orchestrator, context, handlers);
+    Register<PeripheralWatchStartRequestHandler>(orchestrator, context, handlers);
+    Register<PeripheralWatchStopRequestHandler>(orchestrator, context, handlers);
 
     Register<UnknownRequestHandler>(orchestrator, context, handlers);
 

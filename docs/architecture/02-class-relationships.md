@@ -1,30 +1,36 @@
 # Class relationships
 
-## Domain side: DebugContext and its components
+## Domain side: DebugContext and its 10 components
 
 ```mermaid
 classDiagram
     class DebugContext {
         -LldbProvider lldb_provider_ : by value
+        -optional~OpenOcdProvider~ openocd_provider_ : by value, launch-only
         -EventBus event_bus_ : by value
-        -unique_ptr~BreakpointManager~ breakpoint_manager_
-        -unique_ptr~MemoryManager~ memory_manager_
-        -unique_ptr~DisassemblyManager~ disassembly_manager_
-        -unique_ptr~ModuleManager~ module_manager_
-        -unique_ptr~DataManager~ data_manager_
-        -unique_ptr~ExecutionController~ execution_controller_
-        -unique_ptr~TargetManager~ target_manager_
-        -5x std_function seams
-        +Lldb() LldbProvider&
-        +Target() SBTarget&
-        +GetAPIMutex() SBMutex
-        +GetLLDBThread(tid) SBThread
-        +GetLLDBFrame(id) SBFrame
-        +ResolveSource(SBFrame) Source
+        -unique_ptr~BreakpointManager~
+        -unique_ptr~MemoryManager~
+        -unique_ptr~DisassemblyManager~
+        -unique_ptr~ModuleManager~
+        -unique_ptr~DataManager~
+        -unique_ptr~ExecutionController~
+        -unique_ptr~TargetManager~
+        -unique_ptr~WatchManager~
+        -unique_ptr~DeviceManager~
+        -unique_ptr~TraceManager~
+        +WithTarget(fn) forwards to LldbProvider::WithTarget
+        +CreateOpenOcd(config) Error
+        +OpenOcd() OpenOcdProvider*
         +Breakpoints() BreakpointManager&
         +Memory() MemoryManager&
+        +Disassembly() DisassemblyManager&
+        +Modules() ModuleManager&
+        +Data() DataManager&
         +Execution() ExecutionController&
         +Session() TargetManager&
+        +Watch() WatchManager&
+        +Device() DeviceManager&
+        +Trace() TraceManager*
         +Events() EventBus&
         +Emit(DomainEvent)
     }
@@ -32,32 +38,23 @@ classDiagram
     class LldbProvider {
         +SBDebugger debugger
         +SBTarget target
-        +GetAPIMutex() SBMutex
+        +WithTarget(fn) encapsulated lock
     }
 
-    class BreakpointManager {
-        -DebugContext& m_context
-    }
-    class DisassemblyManager {
-        -DebugContext& m_context
-    }
-    class DataManager {
-        -DebugContext& m_context
-    }
-    class ExecutionController {
-        -DebugContext& m_context
-        -thread m_event_thread
-    }
-    class TargetManager {
-        -DebugContext& m_context
-    }
+    class BreakpointManager { -DebugContext& m_context }
+    class DisassemblyManager { -DebugContext& m_context }
+    class DataManager { -DebugContext& m_context }
+    class ExecutionController { -DebugContext& m_context ; -thread m_event_thread }
+    class TargetManager { -DebugContext& m_context }
+    class WatchManager { -DebugContext& m_context ; -one thread per active watch }
+    class DeviceManager { -DebugContext& m_context ; -one thread per active peripheral watch }
     class MemoryManager {
         -LldbProvider& m_lldb_provider
-        note "holds provider directly, not DebugContext&"
+        note "holds the provider directly, not DebugContext&"
     }
     class ModuleManager {
         -LldbProvider& m_lldb_provider
-        note "holds provider directly, not DebugContext&"
+        note "holds the provider directly, not DebugContext&"
     }
 
     DebugContext *-- LldbProvider : by value
@@ -66,6 +63,8 @@ classDiagram
     DebugContext o-- DataManager : unique_ptr
     DebugContext o-- ExecutionController : unique_ptr
     DebugContext o-- TargetManager : unique_ptr
+    DebugContext o-- WatchManager : unique_ptr
+    DebugContext o-- DeviceManager : unique_ptr
     DebugContext o-- MemoryManager : unique_ptr
     DebugContext o-- ModuleManager : unique_ptr
 
@@ -74,26 +73,48 @@ classDiagram
     DataManager --> DebugContext : m_context
     ExecutionController --> DebugContext : m_context
     TargetManager --> DebugContext : m_context
+    WatchManager --> DebugContext : m_context
+    DeviceManager --> DebugContext : m_context
     MemoryManager --> LldbProvider : direct, bypasses DebugContext
     ModuleManager --> LldbProvider : direct, bypasses DebugContext
 ```
 
-`DebugContext` is a mediator: 5 of 7 managers hold `DebugContext&` and reach
-every peer only via `m_context.<Peer>()` (e.g.
-`execution_controller.cc:440` `context.Breakpoints().GetExceptionBPFromStopReason(...)`).
-`MemoryManager` and `ModuleManager` break this pattern - they hold
-`providers::LldbProvider&` directly (`memory_manager.hpp:66,71`), wired at
-construction (`debug_context.cc:24,26`: `std::make_unique<MemoryManager>(lldb_provider_)`
-vs `std::make_unique<BreakpointManager>(*this)` for the rest). They can never
-see a sibling manager even if a future feature needed them to. See
-`05-limitations.md` #7.
+(`TraceManager` isn't drawn with a peer-access arrow: it's constructed via
+its own `TraceManager::Create(DebugContext&)` factory rather than the
+uniform `make_unique<X>(*this)` pattern, since it can fail to construct -
+see `04-event-dataflow.md` for its worker thread.)
 
-Constructor order (`debug_context.cc:22-29`) fixes construction order but not
-an explicit dependency graph among managers - all 7 are built in one
-initializer list against `*this`/`lldb_provider_`, which are both
-already-initialized members at that point (declaration order in the header
-makes this safe, but nothing enforces it if the header's member order
-changes).
+8 of 10 components hold `DebugContext&` and reach every peer only via
+`m_context.<Peer>()`. `MemoryManager` and `ModuleManager` still break this
+pattern - they hold `providers::LldbProvider&` directly, wired at
+construction (`debug_context.cc`: `std::make_unique<MemoryManager>(lldb_provider_)`
+vs `std::make_unique<BreakpointManager>(*this)` for the rest). This is a
+real, current inconsistency (they can never see a sibling manager even if a
+future feature needed them to), not a stale claim - see
+`05-known-characteristics.md`.
+
+## The locking model: `WithTarget`, not per-method copy-paste
+
+Every LLDB SB API call anywhere in `core` goes through
+`LldbProvider::WithTarget(callable)` (`lldb_provider.hpp`):
+
+```cpp
+template <typename Fn>
+auto WithTarget(Fn &&fn) -> std::invoke_result_t<Fn> {
+    lldb::SBMutex lock = target.GetAPIMutex();
+    std::lock_guard<lldb::SBMutex> guard(lock);
+    return fn();
+}
+```
+
+There is no caller-visible lock object to forget, misplace, or hold across a
+nested call - the mutex is recursive, so a `WithTarget` call from inside
+another `WithTarget` callable is safe by construction, not by convention.
+`GetAPIMutex()` itself is no longer part of `DebugContext`'s or
+`LldbProvider`'s public surface; the two remaining raw call sites
+(`lldb_provider.hpp` itself, and one free function in
+`execution_controller.cc` that's always invoked from inside an existing
+`WithTarget` scope) are the encapsulation boundary, not exceptions to it.
 
 ## Communication side: handler base classes
 
@@ -103,12 +124,6 @@ classDiagram
         <<interface>>
         +Run(Request) void
         +GetSupportedFeatures() FeatureSet
-    }
-
-    class Service {
-        <<interface, dead>>
-        +SupportedCommands() vector~string~
-        +HandleRequest(Request) void
     }
 
     class BaseRequestHandler {
@@ -132,29 +147,27 @@ classDiagram
     IRequestHandler <|.. BaseRequestHandler
     BaseRequestHandler <|-- RequestHandler
     BaseRequestHandler <|-- DelayedResponseRequestHandler
-    RequestHandler <|-- "~40 concrete handlers"
+    RequestHandler <|-- "~46 concrete handlers"
     DelayedResponseRequestHandler <|-- LaunchRequestHandler
     DelayedResponseRequestHandler <|-- AttachRequestHandler
 ```
 
-`IRequestHandler` (`include/dap/request_handler.hpp:73`) is the LLDB-agnostic
-seam the `Orchestrator` dispatches through by command name
-(`orchestrator.cc:77-79`). `BaseRequestHandler`
-(`src/handlers/request_handler.hpp:42`) holds exactly two references -
-`Orchestrator&` for communication, `DebugContext&` for domain - and declares
-`operator()` pure virtual. `RequestHandler<Args,Resp>` (`:108`) parses args,
-calls virtual `Run(const Args&)`, formats the response; `Resp` is either
-`llvm::Error` or `llvm::Expected<SomeResponseBody>`, branched at compile time
-(`:120-131`). `DelayedResponseRequestHandler<Args,Resp>` (`:151`) is the same
-shape but stashes the response via
-`orchestrator_.SetDeferredConfigurationResponse` instead of sending
-immediately - used only by `launch`/`attach`, flushed by
+`IRequestHandler` is the seam `Orchestrator` dispatches through by command
+name. `BaseRequestHandler` holds exactly two references - `Orchestrator&`
+for communication, `DebugContext&` for domain - and declares `operator()`
+pure virtual. `RequestHandler<Args,Resp>` parses args, calls virtual
+`Run(const Args&)`, formats the response; `Resp` is either `llvm::Error` or
+`llvm::Expected<SomeResponseBody>`, branched at compile time.
+`DelayedResponseRequestHandler<Args,Resp>` is the same shape but stashes the
+response via `Orchestrator::SetDeferredConfigurationResponse` instead of
+sending immediately - used only by `launch`/`attach`, flushed by
 `ConfigurationDoneRequestHandler::PostRun`.
 
-`Service` (`include/dap/service.hpp:17`) is a second, parallel dispatch
-abstraction - a coarser-grained alternative to `IRequestHandler`, checked as
-a fallback in `Orchestrator::HandleRequest` (`orchestrator.cc:82-89`,
-`command_owners_` table). `Orchestrator::RegisterService` has zero call
-sites in the tree (confirmed via language-server references search) - no
-`Service` is ever registered in `trailer-dap`. Dead abstraction; see
-`05-limitations.md` #8.
+`dap/service.hpp` still declares a `Service` class - a second, coarser
+dispatch abstraction that used to have a fallback path in
+`Orchestrator::HandleRequest`. That fallback (`command_owners_`,
+`RegisterService`) has since been removed from `orchestrator.{hpp,cc}`
+entirely; `Service` is now an unused class with one unused `#include`
+pointing at it, not a live parallel dispatch path. Harmless, and small
+enough that it's noted rather than tracked as a finding - see
+`05-known-characteristics.md`.

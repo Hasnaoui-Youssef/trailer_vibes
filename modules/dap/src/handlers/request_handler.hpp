@@ -653,6 +653,83 @@ public:
   llvm::Error Run(const protocol::TrailerWatchStopArguments &args) const override;
 };
 
+class DeviceInfoRequestHandler
+    : public RequestHandler<protocol::TrailerDeviceInfoArguments,
+                             llvm::Expected<protocol::TrailerDeviceInfoResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerDeviceInfo"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Expected<protocol::TrailerDeviceInfoResponseBody>
+  Run(const protocol::TrailerDeviceInfoArguments &args) const override;
+};
+
+class PeripheralDetailRequestHandler
+    : public RequestHandler<protocol::TrailerPeripheralDetailArguments,
+                             llvm::Expected<protocol::TrailerPeripheralDetailResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerPeripheralDetail"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Expected<protocol::TrailerPeripheralDetailResponseBody>
+  Run(const protocol::TrailerPeripheralDetailArguments &args) const override;
+};
+
+class PeripheralReadRequestHandler
+    : public RequestHandler<protocol::TrailerPeripheralReadArguments,
+                             llvm::Expected<protocol::TrailerPeripheralReadResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerPeripheralRead"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Expected<protocol::TrailerPeripheralReadResponseBody>
+  Run(const protocol::TrailerPeripheralReadArguments &args) const override;
+};
+
+class PeripheralWriteRequestHandler
+    : public RequestHandler<protocol::TrailerPeripheralWriteArguments,
+                             llvm::Expected<protocol::TrailerPeripheralWriteResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerPeripheralWrite"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Expected<protocol::TrailerPeripheralWriteResponseBody>
+  Run(const protocol::TrailerPeripheralWriteArguments &args) const override;
+};
+
+class PeripheralWatchStartRequestHandler
+    : public RequestHandler<protocol::TrailerPeripheralWatchStartArguments,
+                             llvm::Expected<protocol::TrailerPeripheralWatchStartResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerPeripheralWatchStart"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Expected<protocol::TrailerPeripheralWatchStartResponseBody>
+  Run(const protocol::TrailerPeripheralWatchStartArguments &args) const override;
+};
+
+class PeripheralWatchStopRequestHandler
+    : public RequestHandler<protocol::TrailerPeripheralWatchStopArguments,
+                             protocol::TrailerPeripheralWatchStopResponse> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerPeripheralWatchStop"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsPeripheralRequests};
+  }
+  llvm::Error Run(const protocol::TrailerPeripheralWatchStopArguments &args) const override;
+};
+
 class TestGetTargetBreakpointsRequestHandler
     : public RequestHandler<
           protocol::TestGetTargetBreakpointsArguments,

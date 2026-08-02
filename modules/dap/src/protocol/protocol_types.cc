@@ -456,6 +456,8 @@ static llvm::StringLiteral ToString(AdapterFeature feature) {
     return "supportsTraceRequests";
   case eAdapterFeatureSupportsWatchRequests:
     return "supportsWatchRequests";
+  case eAdapterFeatureSupportsPeripheralRequests:
+    return "supportsPeripheralRequests";
   }
   llvm_unreachable("unhandled adapter feature.");
 }
@@ -531,6 +533,7 @@ bool fromJSON(const llvm::json::Value &Params, AdapterFeature &feature,
                 eAdapterFeatureSupportsModuleSymbolsRequest)
           .Case("supportsTraceRequests", eAdapterFeatureSupportsTraceRequests)
           .Case("supportsWatchRequests", eAdapterFeatureSupportsWatchRequests)
+          .Case("supportsPeripheralRequests", eAdapterFeatureSupportsPeripheralRequests)
           .Default(std::nullopt);
 
   if (!parsedFeature) {

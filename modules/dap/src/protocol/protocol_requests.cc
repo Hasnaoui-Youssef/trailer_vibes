@@ -192,6 +192,8 @@ bool fromJSON(const json::Value &Params, Configuration &C, json::Path P) {
                        C.displayExtendedBacktrace) &&
          O.mapOptional("stopOnEntry", C.stopOnEntry) &&
          O.mapOptional("requireHardwareBreakpoints", C.requireHardwareBreakpoints) &&
+         O.mapOptional("deviceName", C.deviceName) &&
+         O.mapOptional("svdPath", C.svdPath) &&
          O.mapOptional("commandEscapePrefix", C.commandEscapePrefix) &&
          O.mapOptional("customFrameFormat", C.customFrameFormat) &&
          O.mapOptional("customThreadFormat", C.customThreadFormat) &&
@@ -803,5 +805,146 @@ bool fromJSON(const json::Value &Params, TrailerWatchStopArguments &A, json::Pat
   return O && O.map("watchId", A.watchId);
 }
 
+llvm::json::Value toJSON(const TrailerMemoryRegion &Region) {
+  return json::Object{
+      {"name", Region.name},
+      {"start", EncodeMemoryReference(Region.start)},
+      {"size", Region.size},
+      {"readable", Region.readable},
+      {"writable", Region.writable},
+      {"executable", Region.executable},
+      {"kind", Region.kind},
+  };
+}
+
+llvm::json::Value toJSON(const TrailerPeripheralSummary &Summary) {
+  return json::Object{
+      {"name", Summary.name},
+      {"description", Summary.description},
+      {"groupName", Summary.groupName},
+      {"baseAddress", EncodeMemoryReference(Summary.baseAddress)},
+      {"addressBlockSize", Summary.addressBlockSize},
+      {"registerCount", Summary.registerCount},
+  };
+}
+
+llvm::json::Value toJSON(const TrailerDeviceInfoResponseBody &Body) {
+  return json::Object{
+      {"deviceName", Body.deviceName},
+      {"core", Body.core},
+      {"memoryRegions", Body.memoryRegions},
+      {"peripherals", Body.peripherals},
+      {"corePeripherals", Body.corePeripherals},
+  };
+}
+
+bool fromJSON(const json::Value &Params, TrailerPeripheralDetailArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("peripheral", A.peripheral) && O.mapOptional("core", A.core);
+}
+
+llvm::json::Value toJSON(const TrailerEnumeratedValue &Value) {
+  json::Object result{
+      {"name", Value.name},
+      {"description", Value.description},
+      {"isDefault", Value.isDefault},
+  };
+  if (Value.value)
+    result.insert({"value", *Value.value});
+  return result;
+}
+
+llvm::json::Value toJSON(const TrailerRegisterField &Field) {
+  return json::Object{
+      {"name", Field.name},
+      {"description", Field.description},
+      {"bitOffset", Field.bitOffset},
+      {"bitWidth", Field.bitWidth},
+      {"access", Field.access},
+      {"readAction", Field.readAction},
+      {"enumeratedValues", Field.enumeratedValues},
+  };
+}
+
+llvm::json::Value toJSON(const TrailerRegister &Register) {
+  json::Object result{
+      {"name", Register.name},
+      {"description", Register.description},
+      {"addressOffset", Register.addressOffset},
+      {"sizeBits", Register.sizeBits},
+      {"access", Register.access},
+      {"readAction", Register.readAction},
+      {"readSafe", Register.readSafe},
+      {"fields", Register.fields},
+  };
+  if (Register.resetValue)
+    result.insert({"resetValue", *Register.resetValue});
+  if (Register.resetMask)
+    result.insert({"resetMask", *Register.resetMask});
+  return result;
+}
+
+llvm::json::Value toJSON(const TrailerInterrupt &Interrupt) {
+  return json::Object{
+      {"name", Interrupt.name},
+      {"description", Interrupt.description},
+      {"value", Interrupt.value},
+  };
+}
+
+llvm::json::Value toJSON(const TrailerPeripheralDetailResponseBody &Body) {
+  return json::Object{
+      {"name", Body.name},
+      {"description", Body.description},
+      {"groupName", Body.groupName},
+      {"baseAddress", EncodeMemoryReference(Body.baseAddress)},
+      {"addressBlockOffset", Body.addressBlockOffset},
+      {"addressBlockSize", Body.addressBlockSize},
+      {"registers", Body.registers},
+      {"interrupts", Body.interrupts},
+  };
+}
+
+bool fromJSON(const json::Value &Params, TrailerPeripheralReadArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("peripheral", A.peripheral) && O.mapOptional("safeOnly", A.safeOnly) &&
+         O.mapOptional("core", A.core);
+}
+
+llvm::json::Value toJSON(const TrailerRegisterReadEntry &Entry) {
+  return json::Object{{"register", Entry.registerName}, {"value", Entry.value}};
+}
+
+llvm::json::Value toJSON(const TrailerPeripheralReadResponseBody &Body) {
+  return json::Object{{"registers", Body.registers}};
+}
+
+bool fromJSON(const json::Value &Params, TrailerPeripheralWriteArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("peripheral", A.peripheral) && O.map("register", A.registerName) &&
+         O.map("value", A.value) && O.mapOptional("core", A.core);
+}
+
+llvm::json::Value toJSON(const TrailerPeripheralWriteResponseBody &Body) {
+  json::Object result;
+  if (Body.value)
+    result.insert({"value", *Body.value});
+  return result;
+}
+
+bool fromJSON(const json::Value &Params, TrailerPeripheralWatchStartArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("peripheral", A.peripheral) && O.mapOptional("intervalMs", A.intervalMs) &&
+         O.mapOptional("safeOnly", A.safeOnly) && O.mapOptional("core", A.core);
+}
+
+llvm::json::Value toJSON(const TrailerPeripheralWatchStartResponseBody &Body) {
+  return json::Object{{"watchId", Body.watchId}};
+}
+
+bool fromJSON(const json::Value &Params, TrailerPeripheralWatchStopArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("watchId", A.watchId);
+}
 
 } // namespace dap::protocol
