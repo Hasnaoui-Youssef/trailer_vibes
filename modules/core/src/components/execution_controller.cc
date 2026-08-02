@@ -14,6 +14,7 @@
 #include "core/components/target_manager.hpp"
 #include "core/debug_context.hpp"
 #include "core/lldb_utils.hpp"
+#include "core/variable_description.hpp"
 #include "dap/dap_error.hpp"
 #include "dap/protocol/protocol_types.hpp"
 #include "lldb/API/SBAddress.h"
@@ -179,286 +180,277 @@ lldb::SBError ExecutionController::WaitForProcessToStop(std::chrono::seconds sec
 }
 
 llvm::Error ExecutionController::ConfigurationDone() {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    // Ensure any command scripts did not leave us in an unexpected state.
+    lldb::SBProcess process = m_context.Target().GetProcess();
+    if (!process.IsValid() || !lldb::SBDebugger::StateIsStoppedState(process.GetState()))
+      return llvm::make_error<DAPError>(
+          "Expected process to be stopped.\r\n\r\nProcess is in an unexpected "
+          "state and may have missed an initial configuration. Please check that "
+          "any debugger command scripts are not resuming the process during the "
+          "launch sequence.");
 
-  // Ensure any command scripts did not leave us in an unexpected state.
-  lldb::SBProcess process = m_context.Target().GetProcess();
-  if (!process.IsValid() || !lldb::SBDebugger::StateIsStoppedState(process.GetState()))
-    return llvm::make_error<DAPError>(
-        "Expected process to be stopped.\r\n\r\nProcess is in an unexpected "
-        "state and may have missed an initial configuration. Please check that "
-        "any debugger command scripts are not resuming the process during the "
-        "launch sequence.");
+    configuration_done = true;
 
-  configuration_done = true;
+    // Waiting until 'configurationDone' to send target based capabilities in case
+    // the launch or attach scripts adjust the target. The initial dummy target
+    // may have different capabilities than the final target.
+    //
+    // Also send here custom capabilities to the client, which is consumed by the
+    // lldb-dap specific editor extension.
+    SendExtraCapabilities();
 
-  // Waiting until 'configurationDone' to send target based capabilities in case
-  // the launch or attach scripts adjust the target. The initial dummy target
-  // may have different capabilities than the final target.
-  //
-  // Also send here custom capabilities to the client, which is consumed by the
-  // lldb-dap specific editor extension.
-  SendExtraCapabilities();
+    // Clients can request a baseline of currently existing threads after we
+    // acknowledge the configurationDone request. Client requests the baseline
+    // of currently existing threads after a successful launch or attach by
+    // sending a 'threads' request right after receiving the configurationDone
+    // response. Obtain the list of threads before we resume the process.
+    initial_thread_list = GetThreads(process, m_context.Data().thread_format);
 
-  // Clients can request a baseline of currently existing threads after we
-  // acknowledge the configurationDone request. Client requests the baseline
-  // of currently existing threads after a successful launch or attach by
-  // sending a 'threads' request right after receiving the configurationDone
-  // response. Obtain the list of threads before we resume the process.
-  initial_thread_list = GetThreads(process, m_context.Data().thread_format);
+    SendProcessEvent(m_context.Session().is_attach ? Attach : Launch);
 
-  SendProcessEvent(m_context.Session().is_attach ? Attach : Launch);
+    if (stop_at_entry)
+      return SendThreadStoppedEvent(/*on_entry=*/true);
 
-  if (stop_at_entry)
-    return SendThreadStoppedEvent(/*on_entry=*/true);
-
-  return ToError(process.Continue());
+    return ToError(process.Continue());
+  });
 }
 
 llvm::Expected<protocol::ContinueResponseBody> ExecutionController::Continue(const protocol::ContinueArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::ContinueResponseBody> {
+    lldb::SBProcess process = m_context.Target().GetProcess();
+    lldb::SBError error;
 
-  lldb::SBProcess process = m_context.Target().GetProcess();
-  lldb::SBError error;
+    if (!lldb::SBDebugger::StateIsStoppedState(process.GetState()))
+      return llvm::make_error<NotStoppedError>();
 
-  if (!lldb::SBDebugger::StateIsStoppedState(process.GetState()))
-    return llvm::make_error<NotStoppedError>();
+    if (args.singleThread)
+      m_context.GetLLDBThread(args.threadId).Resume(error);
+    else
+      error = process.Continue();
 
-  if (args.singleThread)
-    m_context.GetLLDBThread(args.threadId).Resume(error);
-  else
-    error = process.Continue();
+    if (error.Fail())
+      return ToError(error);
 
-  if (error.Fail())
-    return ToError(error);
-
-  protocol::ContinueResponseBody body;
-  body.allThreadsContinued = !args.singleThread;
-  return body;
+    protocol::ContinueResponseBody body;
+    body.allThreadsContinued = !args.singleThread;
+    return body;
+  });
 }
 
 llvm::Error ExecutionController::Pause() {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-
-  lldb::SBProcess process = m_context.Target().GetProcess();
-  lldb::SBError error = process.Stop();
-  return ToError(error);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    lldb::SBProcess process = m_context.Target().GetProcess();
+    lldb::SBError error = process.Stop();
+    return ToError(error);
+  });
 }
 
 llvm::Error ExecutionController::Next(const protocol::NextArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
+    if (!thread.IsValid())
+      return llvm::make_error<DAPError>("invalid thread");
 
-  lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
-  if (!thread.IsValid())
-    return llvm::make_error<DAPError>("invalid thread");
+    if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
+      return llvm::make_error<NotStoppedError>();
 
-  if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
-    return llvm::make_error<NotStoppedError>();
+    // Remember the thread ID that caused the resume so we can set the
+    // "threadCausedFocus" boolean value in the "stopped" events.
+    focus_tid = thread.GetThreadID();
+    lldb::SBError error;
+    if (args.granularity == protocol::eSteppingGranularityInstruction) {
+      thread.StepInstruction(/*step_over=*/true, error);
+    } else {
+      thread.StepOver(args.singleThread ? lldb::eOnlyThisThread : lldb::eOnlyDuringStepping, error);
+    }
 
-  // Remember the thread ID that caused the resume so we can set the
-  // "threadCausedFocus" boolean value in the "stopped" events.
-  focus_tid = thread.GetThreadID();
-  lldb::SBError error;
-  if (args.granularity == protocol::eSteppingGranularityInstruction) {
-    thread.StepInstruction(/*step_over=*/true, error);
-  } else {
-    thread.StepOver(args.singleThread ? lldb::eOnlyThisThread : lldb::eOnlyDuringStepping, error);
-  }
-
-  return ToError(error);
+    return ToError(error);
+  });
 }
 
 llvm::Error ExecutionController::StepIn(const protocol::StepInArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
+    if (!thread.IsValid())
+      return llvm::make_error<DAPError>("invalid thread");
 
-  lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
-  if (!thread.IsValid())
-    return llvm::make_error<DAPError>("invalid thread");
+    // Remember the thread ID that caused the resume so we can set the
+    // "threadCausedFocus" boolean value in the "stopped" events.
+    focus_tid = thread.GetThreadID();
 
-  // Remember the thread ID that caused the resume so we can set the
-  // "threadCausedFocus" boolean value in the "stopped" events.
-  focus_tid = thread.GetThreadID();
+    if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
+      return llvm::make_error<NotStoppedError>();
 
-  if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
-    return llvm::make_error<NotStoppedError>();
+    lldb::SBError error;
+    if (args.granularity == protocol::eSteppingGranularityInstruction) {
+      thread.StepInstruction(/*step_over=*/false, error);
+      return ToError(error);
+    }
 
-  lldb::SBError error;
-  if (args.granularity == protocol::eSteppingGranularityInstruction) {
-    thread.StepInstruction(/*step_over=*/false, error);
+    std::string step_in_target;
+    auto it = step_in_targets.find(args.targetId.value_or(0));
+    if (it != step_in_targets.end())
+      step_in_target = it->second;
+
+    lldb::RunMode run_mode = args.singleThread ? lldb::eOnlyThisThread : lldb::eOnlyDuringStepping;
+    thread.StepInto(step_in_target.empty() ? nullptr : step_in_target.c_str(), LLDB_INVALID_LINE_NUMBER, error,
+                     run_mode);
     return ToError(error);
-  }
-
-  std::string step_in_target;
-  auto it = step_in_targets.find(args.targetId.value_or(0));
-  if (it != step_in_targets.end())
-    step_in_target = it->second;
-
-  lldb::RunMode run_mode = args.singleThread ? lldb::eOnlyThisThread : lldb::eOnlyDuringStepping;
-  thread.StepInto(step_in_target.empty() ? nullptr : step_in_target.c_str(), LLDB_INVALID_LINE_NUMBER, error,
-                   run_mode);
-  return ToError(error);
+  });
 }
 
 llvm::Error ExecutionController::StepOut(const protocol::StepOutArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
+    if (!thread.IsValid())
+      return llvm::make_error<DAPError>("invalid thread");
 
-  lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
-  if (!thread.IsValid())
-    return llvm::make_error<DAPError>("invalid thread");
+    if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
+      return llvm::make_error<NotStoppedError>();
 
-  if (!lldb::SBDebugger::StateIsStoppedState(m_context.Target().GetProcess().GetState()))
-    return llvm::make_error<NotStoppedError>();
+    // Remember the thread ID that caused the resume so we can set the
+    // "threadCausedFocus" boolean value in the "stopped" events.
+    focus_tid = thread.GetThreadID();
+    lldb::SBError error;
+    thread.StepOut(error);
 
-  // Remember the thread ID that caused the resume so we can set the
-  // "threadCausedFocus" boolean value in the "stopped" events.
-  focus_tid = thread.GetThreadID();
-  lldb::SBError error;
-  thread.StepOut(error);
-
-  return ToError(error);
+    return ToError(error);
+  });
 }
 
 llvm::Expected<protocol::StepInTargetsResponseBody> ExecutionController::GetStepInTargets(
     const protocol::StepInTargetsArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::StepInTargetsResponseBody> {
+    step_in_targets.clear();
+    const lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
+    if (!frame.IsValid())
+      return llvm::make_error<DAPError>("Failed to get frame for input frameId.");
 
-  step_in_targets.clear();
-  const lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
-  if (!frame.IsValid())
-    return llvm::make_error<DAPError>("Failed to get frame for input frameId.");
+    lldb::SBAddress pc_addr = frame.GetPCAddress();
+    lldb::SBAddress line_end_addr = pc_addr.GetLineEntry().GetSameLineContiguousAddressRangeEnd(true);
+    lldb::SBInstructionList insts = m_context.Target().ReadInstructions(pc_addr, line_end_addr, /*flavor_string=*/nullptr);
 
-  lldb::SBAddress pc_addr = frame.GetPCAddress();
-  lldb::SBAddress line_end_addr = pc_addr.GetLineEntry().GetSameLineContiguousAddressRangeEnd(true);
-  lldb::SBInstructionList insts = m_context.Target().ReadInstructions(pc_addr, line_end_addr, /*flavor_string=*/nullptr);
+    if (!insts.IsValid())
+      return llvm::make_error<DAPError>("Failed to get instructions for frame.");
 
-  if (!insts.IsValid())
-    return llvm::make_error<DAPError>("Failed to get instructions for frame.");
+    protocol::StepInTargetsResponseBody body;
+    const size_t num_insts = insts.GetSize();
+    for (size_t i = 0; i < num_insts; ++i) {
+      lldb::SBInstruction inst = insts.GetInstructionAtIndex(i);
+      if (!inst.IsValid())
+        break;
 
-  protocol::StepInTargetsResponseBody body;
-  const size_t num_insts = insts.GetSize();
-  for (size_t i = 0; i < num_insts; ++i) {
-    lldb::SBInstruction inst = insts.GetInstructionAtIndex(i);
-    if (!inst.IsValid())
-      break;
+      const lldb::addr_t inst_addr = inst.GetAddress().GetLoadAddress(m_context.Target());
+      if (inst_addr == LLDB_INVALID_ADDRESS)
+        break;
 
-    const lldb::addr_t inst_addr = inst.GetAddress().GetLoadAddress(m_context.Target());
-    if (inst_addr == LLDB_INVALID_ADDRESS)
-      break;
+      // Note: currently only x86/x64 supports flow kind.
+      const lldb::InstructionControlFlowKind flow_kind = inst.GetControlFlowKind(m_context.Target());
 
-    // Note: currently only x86/x64 supports flow kind.
-    const lldb::InstructionControlFlowKind flow_kind = inst.GetControlFlowKind(m_context.Target());
+      if (flow_kind == lldb::eInstructionControlFlowKindCall) {
+        const llvm::StringRef call_operand_name = inst.GetOperands(m_context.Target());
+        lldb::addr_t call_target_addr = LLDB_INVALID_ADDRESS;
+        if (call_operand_name.getAsInteger(0, call_target_addr))
+          continue;
 
-    if (flow_kind == lldb::eInstructionControlFlowKindCall) {
-      const llvm::StringRef call_operand_name = inst.GetOperands(m_context.Target());
-      lldb::addr_t call_target_addr = LLDB_INVALID_ADDRESS;
-      if (call_operand_name.getAsInteger(0, call_target_addr))
-        continue;
+        const lldb::SBAddress call_target_load_addr = m_context.Target().ResolveLoadAddress(call_target_addr);
+        if (!call_target_load_addr.IsValid())
+          continue;
 
-      const lldb::SBAddress call_target_load_addr = m_context.Target().ResolveLoadAddress(call_target_addr);
-      if (!call_target_load_addr.IsValid())
-        continue;
+        // The existing ThreadPlanStepInRange only accept step in target
+        // function with debug info.
+        lldb::SBSymbolContext sc =
+            m_context.Target().ResolveSymbolContextForAddress(call_target_load_addr, lldb::eSymbolContextFunction);
 
-      // The existing ThreadPlanStepInRange only accept step in target
-      // function with debug info.
-      lldb::SBSymbolContext sc =
-          m_context.Target().ResolveSymbolContextForAddress(call_target_load_addr, lldb::eSymbolContextFunction);
+        llvm::StringRef step_in_target_name;
+        if (sc.IsValid() && sc.GetFunction().IsValid())
+          step_in_target_name = sc.GetFunction().GetDisplayName();
 
-      llvm::StringRef step_in_target_name;
-      if (sc.IsValid() && sc.GetFunction().IsValid())
-        step_in_target_name = sc.GetFunction().GetDisplayName();
+        // Skip call sites if we fail to resolve its symbol name.
+        if (step_in_target_name.empty())
+          continue;
 
-      // Skip call sites if we fail to resolve its symbol name.
-      if (step_in_target_name.empty())
-        continue;
-
-      protocol::StepInTarget target;
-      target.id = inst_addr;
-      target.label = step_in_target_name;
-      step_in_targets.try_emplace(inst_addr, step_in_target_name);
-      body.targets.emplace_back(std::move(target));
+        protocol::StepInTarget target;
+        target.id = inst_addr;
+        target.label = step_in_target_name;
+        step_in_targets.try_emplace(inst_addr, step_in_target_name);
+        body.targets.emplace_back(std::move(target));
+      }
     }
-  }
-  return body;
+    return body;
+  });
 }
 
 llvm::Expected<protocol::ThreadsResponseBody> ExecutionController::GetThreadsRequest() {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::ThreadsResponseBody> {
+    lldb::SBProcess process = m_context.Target().GetProcess();
+    std::vector<protocol::Thread> threads;
 
-  lldb::SBProcess process = m_context.Target().GetProcess();
-  std::vector<protocol::Thread> threads;
+    if (!initial_thread_list.empty()) {
+      threads = initial_thread_list;
+      initial_thread_list.clear();
+    } else {
+      if (!lldb::SBDebugger::StateIsStoppedState(process.GetState()))
+        return llvm::make_error<NotStoppedError>();
+      threads = GetThreads(process, m_context.Data().thread_format);
+    }
 
-  if (!initial_thread_list.empty()) {
-    threads = initial_thread_list;
-    initial_thread_list.clear();
-  } else {
-    if (!lldb::SBDebugger::StateIsStoppedState(process.GetState()))
-      return llvm::make_error<NotStoppedError>();
-    threads = GetThreads(process, m_context.Data().thread_format);
-  }
+    if (threads.empty())
+      return llvm::make_error<DAPError>("failed to retrieve threads from process");
 
-  if (threads.empty())
-    return llvm::make_error<DAPError>("failed to retrieve threads from process");
-
-  return protocol::ThreadsResponseBody{threads};
+    return protocol::ThreadsResponseBody{threads};
+  });
 }
 
 llvm::Expected<protocol::ExceptionInfoResponseBody>
 ExecutionController::GetExceptionInfoRequest(const protocol::ExceptionInfoArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::ExceptionInfoResponseBody> {
+    lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
+    if (!thread.IsValid())
+      return llvm::make_error<DAPError>(llvm::formatv("Invalid thread id: {}", args.threadId).str());
 
-  lldb::SBThread thread = m_context.GetLLDBThread(args.threadId);
-  if (!thread.IsValid())
-    return llvm::make_error<DAPError>(llvm::formatv("Invalid thread id: {}", args.threadId).str());
-
-  protocol::ExceptionInfoResponseBody response;
-  response.breakMode = protocol::eExceptionBreakModeAlways;
-  switch (thread.GetStopReason()) {
-  case lldb::eStopReasonSignal:
-    response.exceptionId = "signal";
-    break;
-  case lldb::eStopReasonBreakpoint: {
-    const ExceptionBreakpoint *exc_bp = m_context.Breakpoints().GetExceptionBPFromStopReason(thread);
-    if (exc_bp) {
-      response.exceptionId = exc_bp->GetFilter();
-      response.description = exc_bp->GetLabel();
-    } else {
+    protocol::ExceptionInfoResponseBody response;
+    response.breakMode = protocol::eExceptionBreakModeAlways;
+    switch (thread.GetStopReason()) {
+    case lldb::eStopReasonSignal:
+      response.exceptionId = "signal";
+      break;
+    case lldb::eStopReasonBreakpoint: {
+      const ExceptionBreakpoint *exc_bp = m_context.Breakpoints().GetExceptionBPFromStopReason(thread);
+      if (exc_bp) {
+        response.exceptionId = exc_bp->GetFilter();
+        response.description = exc_bp->GetLabel();
+      } else {
+        response.exceptionId = "exception";
+      }
+    } break;
+    default:
       response.exceptionId = "exception";
     }
-  } break;
-  default:
-    response.exceptionId = "exception";
-  }
 
-  lldb::SBStream stream;
-  if (response.description.empty() && thread.GetStopDescription(stream))
-    response.description = {stream.GetData(), stream.GetSize()};
+    lldb::SBStream stream;
+    if (response.description.empty() && thread.GetStopDescription(stream))
+      response.description = {stream.GetData(), stream.GetSize()};
 
-  if (lldb::SBValue exception = thread.GetCurrentException()) {
-    stream.Clear();
-    response.details = protocol::ExceptionDetails{};
-    if (exception.GetDescription(stream))
-      response.details->message = {stream.GetData(), stream.GetSize()};
-
-    if (lldb::SBThread exception_backtrace = thread.GetCurrentExceptionBacktrace()) {
+    if (lldb::SBValue exception = thread.GetCurrentException()) {
       stream.Clear();
-      exception_backtrace.GetDescription(stream);
-      for (uint32_t idx = 0; idx < exception_backtrace.GetNumFrames(); idx++) {
-        lldb::SBFrame frame = exception_backtrace.GetFrameAtIndex(idx);
-        frame.GetDescription(stream);
+      response.details = protocol::ExceptionDetails{};
+      if (exception.GetDescription(stream))
+        response.details->message = {stream.GetData(), stream.GetSize()};
+
+      if (lldb::SBThread exception_backtrace = thread.GetCurrentExceptionBacktrace()) {
+        stream.Clear();
+        exception_backtrace.GetDescription(stream);
+        for (uint32_t idx = 0; idx < exception_backtrace.GetNumFrames(); idx++) {
+          lldb::SBFrame frame = exception_backtrace.GetFrameAtIndex(idx);
+          frame.GetDescription(stream);
+        }
+        response.details->stackTrace = {stream.GetData(), stream.GetSize()};
       }
-      response.details->stackTrace = {stream.GetData(), stream.GetSize()};
     }
-  }
-  return response;
+    return response;
+  });
 }
 
 void ExecutionController::SendExtraCapabilities() {
@@ -594,72 +586,71 @@ static protocol::StoppedEventBody CreateThreadStoppedEvent(DebugContext &context
 }
 
 llvm::Error ExecutionController::SendThreadStoppedEvent(bool on_entry) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    lldb::SBProcess process = m_context.Target().GetProcess();
+    if (!process.IsValid())
+      return llvm::make_error<DAPError>("invalid process");
 
-  lldb::SBProcess process = m_context.Target().GetProcess();
-  if (!process.IsValid())
-    return llvm::make_error<DAPError>("invalid process");
+    lldb::StateType state = process.GetState();
+    if (!lldb::SBDebugger::StateIsStoppedState(state))
+      return llvm::make_error<NotStoppedError>();
 
-  lldb::StateType state = process.GetState();
-  if (!lldb::SBDebugger::StateIsStoppedState(state))
-    return llvm::make_error<NotStoppedError>();
+    llvm::DenseSet<lldb::tid_t> old_thread_ids;
+    old_thread_ids.swap(thread_ids);
+    uint32_t stop_id = on_entry ? 0 : process.GetStopID();
+    const uint32_t num_threads = process.GetNumThreads();
 
-  llvm::DenseSet<lldb::tid_t> old_thread_ids;
-  old_thread_ids.swap(thread_ids);
-  uint32_t stop_id = on_entry ? 0 : process.GetStopID();
-  const uint32_t num_threads = process.GetNumThreads();
-
-  // First make a pass through the threads to see if the focused thread
-  // has a stop reason. In case the focus thread doesn't have a stop
-  // reason, remember the first thread that has a stop reason so we can
-  // set it as the focus thread if below if needed.
-  lldb::tid_t first_tid_with_reason = LLDB_INVALID_THREAD_ID;
-  uint32_t num_threads_with_reason = 0;
-  bool focus_thread_exists = false;
-  for (uint32_t thread_idx = 0; thread_idx < num_threads; ++thread_idx) {
-    lldb::SBThread thread = process.GetThreadAtIndex(thread_idx);
-    const lldb::tid_t tid = thread.GetThreadID();
-    const bool has_reason = ThreadHasStopReason(thread);
-    if (tid == focus_tid) {
-      focus_thread_exists = true;
-      if (!has_reason)
-        focus_tid = LLDB_INVALID_THREAD_ID;
-    }
-    if (has_reason) {
-      ++num_threads_with_reason;
-      if (first_tid_with_reason == LLDB_INVALID_THREAD_ID)
-        first_tid_with_reason = tid;
-    }
-  }
-
-  if (!focus_thread_exists || focus_tid == LLDB_INVALID_THREAD_ID)
-    focus_tid = first_tid_with_reason;
-
-  // If no threads stopped with a reason, then report the first one so we
-  // at least let the UI know we stopped.
-  if (num_threads_with_reason == 0) {
-    lldb::SBThread thread = process.GetThreadAtIndex(0);
-    focus_tid = thread.GetThreadID();
-    m_context.Emit(StoppedEvent{CreateThreadStoppedEvent(m_context, thread, stop_id)});
-  } else {
+    // First make a pass through the threads to see if the focused thread
+    // has a stop reason. In case the focus thread doesn't have a stop
+    // reason, remember the first thread that has a stop reason so we can
+    // set it as the focus thread if below if needed.
+    lldb::tid_t first_tid_with_reason = LLDB_INVALID_THREAD_ID;
+    uint32_t num_threads_with_reason = 0;
+    bool focus_thread_exists = false;
     for (uint32_t thread_idx = 0; thread_idx < num_threads; ++thread_idx) {
       lldb::SBThread thread = process.GetThreadAtIndex(thread_idx);
-      thread_ids.insert(thread.GetThreadID());
-      if (ThreadHasStopReason(thread))
-        m_context.Emit(StoppedEvent{CreateThreadStoppedEvent(m_context, thread, stop_id)});
+      const lldb::tid_t tid = thread.GetThreadID();
+      const bool has_reason = ThreadHasStopReason(thread);
+      if (tid == focus_tid) {
+        focus_thread_exists = true;
+        if (!has_reason)
+          focus_tid = LLDB_INVALID_THREAD_ID;
+      }
+      if (has_reason) {
+        ++num_threads_with_reason;
+        if (first_tid_with_reason == LLDB_INVALID_THREAD_ID)
+          first_tid_with_reason = tid;
+      }
     }
-  }
 
-  for (const auto &tid : old_thread_ids) {
-    auto end = thread_ids.end();
-    auto pos = thread_ids.find(tid);
-    if (pos == end)
-      SendThreadExitedEvent(tid);
-  }
+    if (!focus_thread_exists || focus_tid == LLDB_INVALID_THREAD_ID)
+      focus_tid = first_tid_with_reason;
 
-  m_context.RunStopCommands();
-  return llvm::Error::success();
+    // If no threads stopped with a reason, then report the first one so we
+    // at least let the UI know we stopped.
+    if (num_threads_with_reason == 0) {
+      lldb::SBThread thread = process.GetThreadAtIndex(0);
+      focus_tid = thread.GetThreadID();
+      m_context.Emit(StoppedEvent{CreateThreadStoppedEvent(m_context, thread, stop_id)});
+    } else {
+      for (uint32_t thread_idx = 0; thread_idx < num_threads; ++thread_idx) {
+        lldb::SBThread thread = process.GetThreadAtIndex(thread_idx);
+        thread_ids.insert(thread.GetThreadID());
+        if (ThreadHasStopReason(thread))
+          m_context.Emit(StoppedEvent{CreateThreadStoppedEvent(m_context, thread, stop_id)});
+      }
+    }
+
+    for (const auto &tid : old_thread_ids) {
+      auto end = thread_ids.end();
+      auto pos = thread_ids.find(tid);
+      if (pos == end)
+        SendThreadExitedEvent(tid);
+    }
+
+    m_context.RunStopCommands();
+    return llvm::Error::success();
+  });
 }
 
 void ExecutionController::SendStdOutStdErr(lldb::SBProcess &process) {
@@ -711,7 +702,7 @@ void ExecutionController::SendMemoryEvent(lldb::SBValue variable) {
   if (!m_context.ClientFeatureEnabled(protocol::eClientFeatureMemoryEvent))
     return;
   protocol::MemoryEventBody body;
-  body.memoryReference = variable.GetLoadAddress();
+  body.memoryReference = GetRealLoadAddress(variable);
   body.count = variable.GetByteSize();
   if (body.memoryReference == LLDB_INVALID_ADDRESS)
     return;
@@ -830,34 +821,36 @@ void ExecutionController::HandleTargetEvent(const lldb::SBEvent &event) {
     const uint32_t num_modules = lldb::SBTarget::GetNumModulesFromEvent(event);
     const bool remove_module = event_mask & lldb::SBTarget::eBroadcastBitModulesUnloaded;
 
-    // NOTE: Both mutexes must be acquired to prevent deadlock when handling
-    // `modules_request`, which also requires both locks.
+    // NOTE: modules_mutex is nested inside WithTarget()'s lock, to prevent
+    // deadlock against `modules_request`, which acquires both in the same
+    // fixed order (see ModuleManager::GetModulesRequest).
     ModuleManager &modules = m_context.Modules();
-    lldb::SBMutex api_mutex = m_context.GetAPIMutex();
-    const std::scoped_lock<lldb::SBMutex, std::mutex> guard(api_mutex, modules.modules_mutex);
-    for (uint32_t i = 0; i < num_modules; ++i) {
-      lldb::SBModule module = lldb::SBTarget::GetModuleAtIndexFromEvent(i, event);
+    m_context.WithTarget([&]() {
+      std::lock_guard<std::mutex> guard(modules.modules_mutex);
+      for (uint32_t i = 0; i < num_modules; ++i) {
+        lldb::SBModule module = lldb::SBTarget::GetModuleAtIndexFromEvent(i, event);
 
-      std::optional<protocol::Module> p_module = modules.CreateModuleDescription(module, remove_module);
-      if (!p_module)
-        continue;
+        std::optional<protocol::Module> p_module = modules.CreateModuleDescription(module, remove_module);
+        if (!p_module)
+          continue;
 
-      llvm::StringRef module_id = p_module->id;
+        llvm::StringRef module_id = p_module->id;
 
-      const bool module_exists = modules.modules.contains(module_id);
-      if (remove_module && module_exists) {
-        modules.modules.erase(module_id);
-        m_context.Emit(ModuleEvent{
-            protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonRemoved}});
-      } else if (module_exists) {
-        m_context.Emit(ModuleEvent{
-            protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonChanged}});
-      } else if (!remove_module) {
-        modules.modules.insert(module_id);
-        m_context.Emit(ModuleEvent{
-            protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonNew}});
+        const bool module_exists = modules.modules.contains(module_id);
+        if (remove_module && module_exists) {
+          modules.modules.erase(module_id);
+          m_context.Emit(ModuleEvent{
+              protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonRemoved}});
+        } else if (module_exists) {
+          m_context.Emit(ModuleEvent{
+              protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonChanged}});
+        } else if (!remove_module) {
+          modules.modules.insert(module_id);
+          m_context.Emit(ModuleEvent{
+              protocol::ModuleEventBody{std::move(p_module).value(), protocol::ModuleEventBody::eReasonNew}});
+        }
       }
-    }
+    });
   } else if (event_mask & lldb::SBTarget::eBroadcastBitNewTargetCreated) {
     // For NewTargetCreated events, GetTargetFromEvent returns the parent
     // target, and GetCreatedTargetFromEvent returns the newly created

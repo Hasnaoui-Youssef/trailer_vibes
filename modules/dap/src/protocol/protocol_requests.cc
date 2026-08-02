@@ -787,5 +787,21 @@ llvm::json::Value toJSON(const TraceStatusResponseBody &Body) {
   return result;
 }
 
+bool fromJSON(const json::Value &Params, TrailerWatchStartArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && DecodeMemoryReference(Params, "address", A.address, P, /*required=*/true) &&
+         O.map("size", A.size) && O.mapOptional("intervalMs", A.intervalMs) &&
+         O.mapOptional("target", A.target);
+}
+
+llvm::json::Value toJSON(const TrailerWatchStartResponseBody &Body) {
+  return json::Object{{"watchId", Body.watchId}};
+}
+
+bool fromJSON(const json::Value &Params, TrailerWatchStopArguments &A, json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.map("watchId", A.watchId);
+}
+
 
 } // namespace dap::protocol

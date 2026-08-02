@@ -6,13 +6,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "core/event_bus.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "dap/protocol/protocol_types.hpp"
 #include "lldb/API/SBAddress.h"
 #include "lldb/API/SBFrame.h"
-#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/API/SBThread.h"
 #include "lldb/lldb-types.h"
@@ -33,6 +34,7 @@ class DataManager;
 class ExecutionController;
 class TargetManager;
 class TraceManager;
+class WatchManager;
 
 class DebugContext {
 public:
@@ -44,7 +46,15 @@ public:
 
   providers::LldbProvider &Lldb() { return lldb_provider_; }
   lldb::SBTarget &Target() { return lldb_provider_.target; }
-  lldb::SBMutex GetAPIMutex() const { return lldb_provider_.GetAPIMutex(); }
+
+  // Forwards to LldbProvider::WithTarget() - see there for the contract.
+  // DebugContext doesn't own the lock, it just composes the provider that
+  // does; managers that only hold a DebugContext& (not a LldbProvider&)
+  // still need a way to reach it.
+  template <typename Fn>
+  auto WithTarget(Fn &&fn) -> std::invoke_result_t<Fn> {
+    return lldb_provider_.WithTarget(std::forward<Fn>(fn));
+  }
 
   llvm::Error CreateOpenOcd(const providers::OpenOcdConfig &config);
   providers::OpenOcdProvider *OpenOcd() { return openocd_provider_ ? &*openocd_provider_ : nullptr; }
@@ -67,6 +77,7 @@ public:
   ExecutionController &Execution() { return *execution_controller_; }
   // Named Session(), not Target(): Target() already returns lldb::SBTarget&.
   TargetManager &Session() { return *target_manager_; }
+  WatchManager &Watch() { return *watch_manager_; }
 
   lldb::SBThread GetLLDBThread(lldb::tid_t tid);
   lldb::SBFrame GetLLDBFrame(uint64_t dap_frame_id);
@@ -144,9 +155,13 @@ private:
   std::unique_ptr<DataManager> data_manager_;
   std::unique_ptr<ExecutionController> execution_controller_;
   std::unique_ptr<TargetManager> target_manager_;
-  // Declared last (destroys first): its destructor synchronously
-  // unsubscribes from the OpenOCD capture callback, which must happen
-  // before disassembly_manager_ (and everything else above) is torn down.
+  // watch_manager_ and trace_manager_ are declared last (destroy first):
+  // both own threads that call into openocd_provider_, which must not go
+  // away while either is still running.
+  std::unique_ptr<WatchManager> watch_manager_;
+  // Its destructor synchronously unsubscribes from the OpenOCD capture
+  // callback, which must happen before disassembly_manager_ (and
+  // everything else above) is torn down.
   std::unique_ptr<TraceManager> trace_manager_;
   std::string trace_unavailable_reason_;
 };

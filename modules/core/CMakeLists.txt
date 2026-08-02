@@ -29,6 +29,7 @@ add_library(core
         src/components/execution_controller.cc
         src/components/target_manager.cc
         src/components/trace_manager.cc
+        src/components/watch_manager.cc
 )
 
 target_include_directories(core PUBLIC
@@ -48,3 +49,5 @@ target_compile_options(core PUBLIC
 )
 
 target_compile_features(core PUBLIC cxx_std_23)
+
+add_subdirectory(test)

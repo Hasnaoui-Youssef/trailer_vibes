@@ -9,12 +9,12 @@
 #include "core/components/module_manager.hpp"
 #include "core/components/target_manager.hpp"
 #include "core/components/trace_manager.hpp"
+#include "core/components/watch_manager.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
 #include "dap/protocol/protocol_events.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "lldb/API/SBDebugger.h"
-#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBProcess.h"
 #include "llvm/Support/Base64.h"
 
@@ -27,7 +27,8 @@ DebugContext::DebugContext()
       module_manager_(std::make_unique<ModuleManager>(lldb_provider_)),
       data_manager_(std::make_unique<DataManager>(*this)),
       execution_controller_(std::make_unique<ExecutionController>(*this)),
-      target_manager_(std::make_unique<TargetManager>(*this)) {}
+      target_manager_(std::make_unique<TargetManager>(*this)),
+      watch_manager_(std::make_unique<WatchManager>(*this)) {}
 
 // Defined here (not defaulted in the header) because BreakpointManager,
 // MemoryManager, DisassemblyManager, ModuleManager, DataManager,
@@ -122,36 +123,33 @@ bool DebugContext::IsInterruptRequested() { return lldb_provider_.debugger.Inter
 void DebugContext::CancelInterruptRequest() { lldb_provider_.debugger.CancelInterruptRequest(); }
 
 std::string DebugContext::ExecutablePath() {
-  lldb::SBMutex lock = GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-  return GetSBFileSpecPath(lldb_provider_.target.GetExecutable());
+  return WithTarget([&]() { return GetSBFileSpecPath(lldb_provider_.target.GetExecutable()); });
 }
 
 std::string DebugContext::TargetTriple() {
-  lldb::SBMutex lock = GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-  const char *triple = lldb_provider_.target.GetTriple();
-  return triple ? triple : "";
+  return WithTarget([&]() -> std::string {
+    const char *triple = lldb_provider_.target.GetTriple();
+    return triple ? triple : "";
+  });
 }
 
 std::optional<uint64_t> DebugContext::ProcessId() {
-  lldb::SBMutex lock = GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-  lldb::SBProcess process = lldb_provider_.target.GetProcess();
-  if (!process.IsValid())
-    return std::nullopt;
-  return process.GetProcessID();
+  return WithTarget([&]() -> std::optional<uint64_t> {
+    lldb::SBProcess process = lldb_provider_.target.GetProcess();
+    if (!process.IsValid())
+      return std::nullopt;
+    return process.GetProcessID();
+  });
 }
 
 std::vector<dap::protocol::ExceptionBreakpointsFilter> DebugContext::ExceptionBreakpointFilters() {
-  lldb::SBMutex lock = GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-
-  breakpoint_manager_->PopulateExceptionBreakpoints();
-  std::vector<dap::protocol::ExceptionBreakpointsFilter> filters;
-  for (const auto &exc_bp : breakpoint_manager_->exception_breakpoints)
-    filters.emplace_back(CreateExceptionBreakpointFilter(exc_bp));
-  return filters;
+  return WithTarget([&]() {
+    breakpoint_manager_->PopulateExceptionBreakpoints();
+    std::vector<dap::protocol::ExceptionBreakpointsFilter> filters;
+    for (const auto &exc_bp : breakpoint_manager_->exception_breakpoints)
+      filters.emplace_back(CreateExceptionBreakpointFilter(exc_bp));
+    return filters;
+  });
 }
 
 std::string DebugContext::LldbVersionString() { return lldb_provider_.debugger.GetVersionString(); }

@@ -1,12 +1,14 @@
 #ifndef TRAILER_PROVIDERS_OPENOCD_PROVIDER_COMMAND_QUEUE_HPP_
 #define TRAILER_PROVIDERS_OPENOCD_PROVIDER_COMMAND_QUEUE_HPP_
 
+#include <chrono>
 #include <deque>
 #include <expected>
 #include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -34,6 +36,10 @@ class CommandQueue {
     // Blocks until server_loop() (started by Start()) returns.
     void Join();
 
+    // Every server_loop turn a task submitted here waits behind is bounded by
+    // this, so a caller blocked in RunSync() cannot wait forever.
+    static constexpr std::chrono::milliseconds kDefaultTimeout{5000};
+
     template <typename Fn>
     auto Post(Fn&& fn) -> std::future<std::invoke_result_t<Fn>> {
         using R = std::invoke_result_t<Fn>;
@@ -50,9 +56,24 @@ class CommandQueue {
     // Synchronous convenience: the shape every OpenOcdProvider public method
     // actually wants (see Phase 3 of the plan - futures at this layer,
     // synchronous wrappers above it).
+    //
+    // Bounded by timeout: if server_loop hasn't run the task in time, this
+    // returns nullopt (or false for a void Fn) instead of blocking forever.
+    // fn must not capture the caller's stack by reference - it may still be
+    // running on server_loop's thread after this returns on timeout, so it
+    // has to own everything it touches.
     template <typename Fn>
-    auto RunSync(Fn&& fn) -> std::invoke_result_t<Fn> {
-        return Post(std::forward<Fn>(fn)).get();
+    auto RunSync(Fn&& fn, std::chrono::milliseconds timeout = kDefaultTimeout) {
+        using R = std::invoke_result_t<Fn>;
+        std::future<R> future = Post(std::forward<Fn>(fn));
+        if constexpr (std::is_void_v<R>) {
+            if (future.wait_for(timeout) != std::future_status::ready) return false;
+            future.get();
+            return true;
+        } else {
+            if (future.wait_for(timeout) != std::future_status::ready) return std::optional<R>(std::nullopt);
+            return std::optional<R>(future.get());
+        }
     }
 
  private:

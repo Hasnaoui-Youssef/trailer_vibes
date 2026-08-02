@@ -1,11 +1,14 @@
 #include "dap/transport.hpp"
 
+#include <poll.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <charconv>
 #include <iostream>
 #include <string_view>
+#include <utility>
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -16,7 +19,66 @@ constexpr size_t kReadChunkSize = 4096;
 constexpr std::string_view kContentLengthHeader = "Content-Length:";
 }  // namespace
 
-Transport::Transport(int in_fd, int out_fd) : in_fd_(in_fd), out_fd_(out_fd) {}
+Transport::Transport(int in_fd, int out_fd) : in_fd_(in_fd), out_fd_(out_fd) {
+    int fds[2];
+    if (pipe(fds) == 0) {
+        stop_pipe_read_ = fds[0];
+        stop_pipe_write_ = fds[1];
+    }
+}
+
+Transport::~Transport() {
+    if (stop_pipe_read_ >= 0) close(stop_pipe_read_);
+    if (stop_pipe_write_ >= 0) close(stop_pipe_write_);
+}
+
+Transport::Transport(Transport &&other) noexcept
+    : in_fd_(other.in_fd_), out_fd_(other.out_fd_), read_buffer_(std::move(other.read_buffer_)),
+      read_pos_(other.read_pos_), stop_pipe_read_(other.stop_pipe_read_),
+      stop_pipe_write_(other.stop_pipe_write_) {
+    other.stop_pipe_read_ = -1;
+    other.stop_pipe_write_ = -1;
+}
+
+Transport &Transport::operator=(Transport &&other) noexcept {
+    if (this == &other) return *this;
+    if (stop_pipe_read_ >= 0) close(stop_pipe_read_);
+    if (stop_pipe_write_ >= 0) close(stop_pipe_write_);
+
+    in_fd_ = other.in_fd_;
+    out_fd_ = other.out_fd_;
+    read_buffer_ = std::move(other.read_buffer_);
+    read_pos_ = other.read_pos_;
+    stop_pipe_read_ = other.stop_pipe_read_;
+    stop_pipe_write_ = other.stop_pipe_write_;
+    other.stop_pipe_read_ = -1;
+    other.stop_pipe_write_ = -1;
+    return *this;
+}
+
+void Transport::RequestStop() {
+    if (stop_pipe_write_ < 0) return;
+    const char byte = 0;
+    (void)write(stop_pipe_write_, &byte, 1);
+}
+
+bool Transport::WaitForReadable() {
+    if (stop_pipe_read_ < 0) return true;  // moved-from: no interrupt support, fall back to blocking read
+
+    pollfd fds[2] = {
+        {in_fd_, POLLIN, 0},
+        {stop_pipe_read_, POLLIN, 0},
+    };
+    for (;;) {
+        const int ready = poll(fds, 2, -1);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        break;
+    }
+    return !(fds[1].revents & POLLIN);
+}
 
 bool Transport::ReadHeaderLine(std::string &line) {
     for (;;) {
@@ -29,6 +91,8 @@ bool Transport::ReadHeaderLine(std::string &line) {
 
         read_buffer_.erase(0, read_pos_);
         read_pos_ = 0;
+
+        if (!WaitForReadable()) return false;
 
         char chunk[kReadChunkSize];
         const ssize_t n = read(in_fd_, chunk, sizeof(chunk));
@@ -73,6 +137,8 @@ std::optional<llvm::json::Value> Transport::ReadMessage() {
 
     size_t remaining = *content_length - take_from_buffer;
     while (remaining > 0) {
+        if (!WaitForReadable()) return std::nullopt;
+
         char chunk[kReadChunkSize];
         const ssize_t n = read(in_fd_, chunk, std::min(remaining, sizeof(chunk)));
         if (n <= 0) {

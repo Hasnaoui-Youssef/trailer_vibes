@@ -629,6 +629,30 @@ public:
   Run(const protocol::TraceStatusArguments &args) const override;
 };
 
+class WatchStartRequestHandler
+    : public RequestHandler<protocol::TrailerWatchStartArguments,
+                             llvm::Expected<protocol::TrailerWatchStartResponseBody>> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerWatchStart"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsWatchRequests};
+  }
+  llvm::Expected<protocol::TrailerWatchStartResponseBody>
+  Run(const protocol::TrailerWatchStartArguments &args) const override;
+};
+
+class WatchStopRequestHandler
+    : public RequestHandler<protocol::TrailerWatchStopArguments, protocol::TrailerWatchStopResponse> {
+public:
+  using RequestHandler::RequestHandler;
+  static llvm::StringLiteral GetCommand() { return "trailerWatchStop"; }
+  FeatureSet GetSupportedFeatures() const override {
+    return {protocol::eAdapterFeatureSupportsWatchRequests};
+  }
+  llvm::Error Run(const protocol::TrailerWatchStopArguments &args) const override;
+};
+
 class TestGetTargetBreakpointsRequestHandler
     : public RequestHandler<
           protocol::TestGetTargetBreakpointsArguments,

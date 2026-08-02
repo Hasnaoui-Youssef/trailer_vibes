@@ -1,12 +1,15 @@
 #ifndef TRAILER_CORE_COMPONENTS_TRACE_MANAGER_HPP_
 #define TRAILER_CORE_COMPONENTS_TRACE_MANAGER_HPP_
 
+#include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <expected>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "dap/protocol/protocol_requests.hpp"
@@ -40,7 +43,14 @@ private:
   TraceManager(DebugContext &context, std::string sink, std::string source,
                trace_provider::TraceSession session);
 
+  // Fast path, runs on OpenOCD's server_loop thread: accumulates raw bytes
+  // and, once a decodable unit is ready, hands it to decode_worker_ via
+  // decode_queue_ instead of decoding inline.
   void OnCapture(std::span<const std::byte> data, bool is_barrier);
+
+  // The only thread that ever calls session_.Append() - trace increments
+  // are order-dependent, so decode is single-consumer, not a pool.
+  void DecodeWorkerMain();
 
   DebugContext &m_context;
   std::string sink_;
@@ -53,6 +63,11 @@ private:
   std::vector<model::ReconstructedInstruction> instructions_;
   std::vector<model::FunctionBlock> function_blocks_;
   std::vector<model::TraceGap> gaps_;
+
+  std::thread decode_worker_;
+  std::condition_variable decode_cv_;
+  std::deque<std::vector<std::byte>> decode_queue_;
+  bool shutting_down_ = false;
 };
 
 }  // namespace core

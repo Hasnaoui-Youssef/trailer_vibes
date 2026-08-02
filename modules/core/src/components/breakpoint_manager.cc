@@ -7,6 +7,7 @@
 
 #include "core/components/data_manager.hpp"
 #include "core/components/watchpoint.hpp"
+#include "core/variable_description.hpp"
 #include "dap/dap_error.hpp"
 #include "lldb/API/SBAddress.h"
 #include "lldb/API/SBCompileUnit.h"
@@ -18,7 +19,6 @@
 #include "lldb/API/SBLanguageRuntime.h"
 #include "lldb/API/SBLineEntry.h"
 #include "lldb/API/SBMemoryRegionInfo.h"
-#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBProcess.h"
 #include "lldb/API/SBSymbol.h"
 #include "lldb/API/SBSymbolContext.h"
@@ -113,22 +113,21 @@ ExceptionBreakpoint *BreakpointManager::GetExceptionBPFromStopReason(lldb::SBThr
 std::vector<protocol::Breakpoint> BreakpointManager::SetSourceBreakpoints(
     const protocol::Source &source,
     const std::optional<std::vector<protocol::SourceBreakpoint>> &breakpoints) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() {
+    std::vector<protocol::Breakpoint> response_breakpoints;
+    if (source.sourceReference) {
+      // Breakpoint set by assembly source.
+      auto &existing_breakpoints = m_source_assembly_breakpoints[*source.sourceReference];
+      response_breakpoints = SetSourceBreakpoints(source, breakpoints, existing_breakpoints);
+    } else {
+      // Breakpoint set by a regular source file.
+      const auto path = source.path.value_or("");
+      auto &existing_breakpoints = m_source_breakpoints[path];
+      response_breakpoints = SetSourceBreakpoints(source, breakpoints, existing_breakpoints);
+    }
 
-  std::vector<protocol::Breakpoint> response_breakpoints;
-  if (source.sourceReference) {
-    // Breakpoint set by assembly source.
-    auto &existing_breakpoints = m_source_assembly_breakpoints[*source.sourceReference];
-    response_breakpoints = SetSourceBreakpoints(source, breakpoints, existing_breakpoints);
-  } else {
-    // Breakpoint set by a regular source file.
-    const auto path = source.path.value_or("");
-    auto &existing_breakpoints = m_source_breakpoints[path];
-    response_breakpoints = SetSourceBreakpoints(source, breakpoints, existing_breakpoints);
-  }
-
-  return response_breakpoints;
+    return response_breakpoints;
+  });
 }
 
 std::vector<protocol::Breakpoint> BreakpointManager::SetSourceBreakpoints(
@@ -264,96 +263,93 @@ std::vector<LocationLine> GetAssemblyBreakpointLocations(lldb::SBTarget &target,
 
 protocol::BreakpointLocationsResponseBody BreakpointManager::GetBreakpointLocations(
     const protocol::BreakpointLocationsArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() {
+    uint32_t start_line = args.line;
+    uint32_t start_column = args.column.value_or(LLDB_INVALID_COLUMN_NUMBER);
+    uint32_t end_line = args.endLine.value_or(start_line);
+    uint32_t end_column = args.endColumn.value_or(std::numeric_limits<uint32_t>::max());
 
-  uint32_t start_line = args.line;
-  uint32_t start_column = args.column.value_or(LLDB_INVALID_COLUMN_NUMBER);
-  uint32_t end_line = args.endLine.value_or(start_line);
-  uint32_t end_column = args.endColumn.value_or(std::numeric_limits<uint32_t>::max());
+    std::vector<LocationLine> locations;
+    if (args.source.sourceReference) {
+      locations = GetAssemblyBreakpointLocations(m_context.Target(), *args.source.sourceReference, start_line, end_line);
+    } else {
+      std::string path = args.source.path.value_or("");
+      locations = GetSourceBreakpointLocations(m_context.Target(), path, start_line, start_column, end_line, end_column);
+    }
 
-  std::vector<LocationLine> locations;
-  if (args.source.sourceReference) {
-    locations = GetAssemblyBreakpointLocations(m_context.Target(), *args.source.sourceReference, start_line, end_line);
-  } else {
-    std::string path = args.source.path.value_or("");
-    locations = GetSourceBreakpointLocations(m_context.Target(), path, start_line, start_column, end_line, end_column);
-  }
+    // The line entries are sorted by addresses, but we must return the list
+    // ordered by line / column position.
+    std::sort(locations.begin(), locations.end());
+    locations.erase(llvm::unique(locations), locations.end());
 
-  // The line entries are sorted by addresses, but we must return the list
-  // ordered by line / column position.
-  std::sort(locations.begin(), locations.end());
-  locations.erase(llvm::unique(locations), locations.end());
+    std::vector<protocol::BreakpointLocation> breakpoint_locations;
+    for (auto &l : locations)
+      breakpoint_locations.push_back({l.first, l.second, std::nullopt, std::nullopt});
 
-  std::vector<protocol::BreakpointLocation> breakpoint_locations;
-  for (auto &l : locations)
-    breakpoint_locations.push_back({l.first, l.second, std::nullopt, std::nullopt});
-
-  return protocol::BreakpointLocationsResponseBody{/*breakpoints=*/std::move(breakpoint_locations)};
+    return protocol::BreakpointLocationsResponseBody{/*breakpoints=*/std::move(breakpoint_locations)};
+  });
 }
 
 protocol::SetInstructionBreakpointsResponseBody BreakpointManager::SetInstructionBreakpoints(
     const protocol::SetInstructionBreakpointsArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() {
+    std::vector<protocol::Breakpoint> response_breakpoints;
 
-  std::vector<protocol::Breakpoint> response_breakpoints;
+    // Disable any instruction breakpoints that aren't in this request.
+    // There is no call to remove instruction breakpoints other than calling this
+    // function with a smaller or empty "breakpoints" list.
+    llvm::DenseSet<lldb::addr_t> seen(llvm::from_range, llvm::make_first_range(instruction_breakpoints));
 
-  // Disable any instruction breakpoints that aren't in this request.
-  // There is no call to remove instruction breakpoints other than calling this
-  // function with a smaller or empty "breakpoints" list.
-  llvm::DenseSet<lldb::addr_t> seen(llvm::from_range, llvm::make_first_range(instruction_breakpoints));
+    for (const auto &bp : args.breakpoints) {
+      // Read instruction breakpoint request.
+      InstructionBreakpoint inst_bp(m_context, bp);
+      const auto [iv, inserted] =
+          instruction_breakpoints.try_emplace(inst_bp.GetInstructionAddressReference(), m_context, bp);
+      if (inserted)
+        iv->second.SetBreakpoint();
+      else
+        iv->second.UpdateBreakpoint(inst_bp);
+      response_breakpoints.push_back(iv->second.ToProtocolBreakpoint());
+      seen.erase(inst_bp.GetInstructionAddressReference());
+    }
 
-  for (const auto &bp : args.breakpoints) {
-    // Read instruction breakpoint request.
-    InstructionBreakpoint inst_bp(m_context, bp);
-    const auto [iv, inserted] =
-        instruction_breakpoints.try_emplace(inst_bp.GetInstructionAddressReference(), m_context, bp);
-    if (inserted)
-      iv->second.SetBreakpoint();
-    else
-      iv->second.UpdateBreakpoint(inst_bp);
-    response_breakpoints.push_back(iv->second.ToProtocolBreakpoint());
-    seen.erase(inst_bp.GetInstructionAddressReference());
-  }
+    for (const auto &addr : seen) {
+      auto inst_bp = instruction_breakpoints.find(addr);
+      if (inst_bp == instruction_breakpoints.end())
+        continue;
+      m_context.Target().BreakpointDelete(inst_bp->second.GetID());
+      instruction_breakpoints.erase(addr);
+    }
 
-  for (const auto &addr : seen) {
-    auto inst_bp = instruction_breakpoints.find(addr);
-    if (inst_bp == instruction_breakpoints.end())
-      continue;
-    m_context.Target().BreakpointDelete(inst_bp->second.GetID());
-    instruction_breakpoints.erase(addr);
-  }
-
-  return protocol::SetInstructionBreakpointsResponseBody{std::move(response_breakpoints)};
+    return protocol::SetInstructionBreakpointsResponseBody{std::move(response_breakpoints)};
+  });
 }
 
 protocol::SetDataBreakpointsResponseBody BreakpointManager::SetDataBreakpoints(
     const protocol::SetDataBreakpointsArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() {
+    std::vector<protocol::Breakpoint> response_breakpoints;
 
-  std::vector<protocol::Breakpoint> response_breakpoints;
+    m_context.Target().DeleteAllWatchpoints();
+    std::vector<Watchpoint> watchpoints;
+    for (const auto &bp : args.breakpoints)
+      watchpoints.emplace_back(m_context, bp);
 
-  m_context.Target().DeleteAllWatchpoints();
-  std::vector<Watchpoint> watchpoints;
-  for (const auto &bp : args.breakpoints)
-    watchpoints.emplace_back(m_context, bp);
-
-  // If two watchpoints start at the same address, the latter overwrite the
-  // former. So, we only enable those at first-seen addresses when iterating
-  // backward.
-  std::set<lldb::addr_t> addresses;
-  for (auto iter = watchpoints.rbegin(); iter != watchpoints.rend(); ++iter) {
-    if (addresses.count(iter->GetAddress()) == 0) {
-      iter->SetWatchpoint();
-      addresses.insert(iter->GetAddress());
+    // If two watchpoints start at the same address, the latter overwrite the
+    // former. So, we only enable those at first-seen addresses when iterating
+    // backward.
+    std::set<lldb::addr_t> addresses;
+    for (auto iter = watchpoints.rbegin(); iter != watchpoints.rend(); ++iter) {
+      if (addresses.count(iter->GetAddress()) == 0) {
+        iter->SetWatchpoint();
+        addresses.insert(iter->GetAddress());
+      }
     }
-  }
-  for (auto wp : watchpoints)
-    response_breakpoints.push_back(wp.ToProtocolBreakpoint());
+    for (auto wp : watchpoints)
+      response_breakpoints.push_back(wp.ToProtocolBreakpoint());
 
-  return protocol::SetDataBreakpointsResponseBody{std::move(response_breakpoints)};
+    return protocol::SetDataBreakpointsResponseBody{std::move(response_breakpoints)};
+  });
 }
 
 namespace {
@@ -374,76 +370,75 @@ bool IsReadableOrWritable(lldb::SBTarget &target, lldb::addr_t load_addr) {
 
 llvm::Expected<protocol::DataBreakpointInfoResponseBody> BreakpointManager::GetDataBreakpointInfo(
     const protocol::DataBreakpointInfoArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::DataBreakpointInfoResponseBody> {
+    protocol::DataBreakpointInfoResponseBody response;
+    lldb::SBValue variable = m_context.Data().variables.FindVariable(args.variablesReference.value_or(0), args.name);
+    std::string addr, size;
 
-  protocol::DataBreakpointInfoResponseBody response;
-  lldb::SBValue variable = m_context.Data().variables.FindVariable(args.variablesReference.value_or(0), args.name);
-  std::string addr, size;
-
-  bool is_data_ok = true;
-  if (variable.IsValid()) {
-    lldb::addr_t load_addr = variable.GetLoadAddress();
-    size_t byte_size = variable.GetByteSize();
-    if (load_addr == LLDB_INVALID_ADDRESS) {
-      is_data_ok = false;
-      response.description = "does not exist in memory, its location is " + std::string(variable.GetLocation());
-    } else if (byte_size == 0) {
-      is_data_ok = false;
-      response.description = "variable size is 0";
-    } else {
-      addr = llvm::utohexstr(load_addr);
-      size = llvm::utostr(byte_size);
-    }
-  } else if (lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
-             args.variablesReference.value_or(0) == 0 && frame.IsValid()) {
-    lldb::SBValue value = frame.EvaluateExpression(args.name.c_str());
-    if (value.GetError().Fail()) {
-      lldb::SBError error = value.GetError();
-      const char *error_cstr = error.GetCString();
-      is_data_ok = false;
-      response.description = error_cstr && error_cstr[0] ? std::string(error_cstr) : "evaluation failed";
-    } else {
-      uint64_t load_addr = value.GetValueAsUnsigned();
-      lldb::SBData data = value.GetPointeeData();
-      if (data.IsValid()) {
-        size = llvm::utostr(data.GetByteSize());
-        addr = llvm::utohexstr(load_addr);
-        if (!IsReadableOrWritable(m_context.Target(), load_addr)) {
-          is_data_ok = false;
-          response.description = "memory region for address " + addr + " has no read or write permissions";
-        }
-      } else {
+    bool is_data_ok = true;
+    if (variable.IsValid()) {
+      lldb::addr_t load_addr = GetRealLoadAddress(variable);
+      size_t byte_size = variable.GetByteSize();
+      if (load_addr == LLDB_INVALID_ADDRESS) {
         is_data_ok = false;
-        response.description = "unable to get byte size for expression: " + args.name;
+        response.description = "does not exist in memory, its location is " + std::string(variable.GetLocation());
+      } else if (byte_size == 0) {
+        is_data_ok = false;
+        response.description = "variable size is 0";
+      } else {
+        addr = llvm::utohexstr(load_addr);
+        size = llvm::utostr(byte_size);
       }
+    } else if (lldb::SBFrame frame = m_context.GetLLDBFrame(args.frameId);
+               args.variablesReference.value_or(0) == 0 && frame.IsValid()) {
+      lldb::SBValue value = frame.EvaluateExpression(args.name.c_str());
+      if (value.GetError().Fail()) {
+        lldb::SBError error = value.GetError();
+        const char *error_cstr = error.GetCString();
+        is_data_ok = false;
+        response.description = error_cstr && error_cstr[0] ? std::string(error_cstr) : "evaluation failed";
+      } else {
+        uint64_t load_addr = value.GetValueAsUnsigned();
+        lldb::SBData data = value.GetPointeeData();
+        if (data.IsValid()) {
+          size = llvm::utostr(data.GetByteSize());
+          addr = llvm::utohexstr(load_addr);
+          if (!IsReadableOrWritable(m_context.Target(), load_addr)) {
+            is_data_ok = false;
+            response.description = "memory region for address " + addr + " has no read or write permissions";
+          }
+        } else {
+          is_data_ok = false;
+          response.description = "unable to get byte size for expression: " + args.name;
+        }
+      }
+    } else if (args.asAddress) {
+      size = llvm::utostr(args.bytes.value_or(m_context.Target().GetAddressByteSize()));
+      lldb::addr_t load_addr = LLDB_INVALID_ADDRESS;
+      if (llvm::StringRef(args.name).getAsInteger<lldb::addr_t>(0, load_addr))
+        return llvm::make_error<dap::DAPError>(args.name + " is not a valid address", llvm::inconvertibleErrorCode(),
+                                               false);
+      addr = llvm::utohexstr(load_addr);
+      if (!IsReadableOrWritable(m_context.Target(), load_addr))
+        return llvm::make_error<dap::DAPError>("memory region for address " + addr + " has no read or write permissions",
+                                               llvm::inconvertibleErrorCode(), false);
+    } else {
+      is_data_ok = false;
+      response.description = "variable not found: " + args.name;
     }
-  } else if (args.asAddress) {
-    size = llvm::utostr(args.bytes.value_or(m_context.Target().GetAddressByteSize()));
-    lldb::addr_t load_addr = LLDB_INVALID_ADDRESS;
-    if (llvm::StringRef(args.name).getAsInteger<lldb::addr_t>(0, load_addr))
-      return llvm::make_error<dap::DAPError>(args.name + " is not a valid address", llvm::inconvertibleErrorCode(),
-                                             false);
-    addr = llvm::utohexstr(load_addr);
-    if (!IsReadableOrWritable(m_context.Target(), load_addr))
-      return llvm::make_error<dap::DAPError>("memory region for address " + addr + " has no read or write permissions",
-                                             llvm::inconvertibleErrorCode(), false);
-  } else {
-    is_data_ok = false;
-    response.description = "variable not found: " + args.name;
-  }
 
-  if (is_data_ok) {
-    response.dataId = addr + "/" + size;
-    response.accessTypes = {protocol::eDataBreakpointAccessTypeRead, protocol::eDataBreakpointAccessTypeWrite,
-                            protocol::eDataBreakpointAccessTypeReadWrite};
-    if (args.asAddress)
-      response.description = size + " bytes at " + addr;
-    else
-      response.description = size + " bytes at " + addr + " " + args.name;
-  }
+    if (is_data_ok) {
+      response.dataId = addr + "/" + size;
+      response.accessTypes = {protocol::eDataBreakpointAccessTypeRead, protocol::eDataBreakpointAccessTypeWrite,
+                              protocol::eDataBreakpointAccessTypeReadWrite};
+      if (args.asAddress)
+        response.description = size + " bytes at " + addr;
+      else
+        response.description = size + " bytes at " + addr + " " + args.name;
+    }
 
-  return response;
+    return response;
+  });
 }
 
 }  // namespace core

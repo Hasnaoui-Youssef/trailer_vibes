@@ -13,7 +13,6 @@
 #include "lldb/API/SBFileSpec.h"
 #include "lldb/API/SBModule.h"
 #include "lldb/API/SBModuleSpec.h"
-#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBSection.h"
 #include "lldb/API/SBSymbol.h"
 #include "lldb/API/SBTarget.h"
@@ -204,112 +203,113 @@ std::optional<protocol::Module> ModuleManager::CreateModuleDescription(lldb::SBM
 
 llvm::Expected<protocol::CompileUnitsResponseBody>
 ModuleManager::GetCompileUnitsRequest(const std::optional<protocol::CompileUnitsArguments> &args) {
-  lldb::SBMutex lock = m_lldb_provider.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
-
-  std::vector<protocol::CompileUnit> units;
-  const int num_modules = m_lldb_provider.target.GetNumModules();
-  for (int i = 0; i < num_modules; i++) {
-    lldb::SBModule curr_module = m_lldb_provider.target.GetModuleAtIndex(i);
-    if (args->moduleId == llvm::StringRef(curr_module.GetUUIDString())) {
-      const int num_units = curr_module.GetNumCompileUnits();
-      for (int j = 0; j < num_units; j++) {
-        lldb::SBCompileUnit curr_unit = curr_module.GetCompileUnitAtIndex(j);
-        char unit_path_arr[PATH_MAX];
-        curr_unit.GetFileSpec().GetPath(unit_path_arr, sizeof(unit_path_arr));
-        units.emplace_back(protocol::CompileUnit{std::string(unit_path_arr)});
+  return m_lldb_provider.WithTarget([&]() {
+    std::vector<protocol::CompileUnit> units;
+    const int num_modules = m_lldb_provider.target.GetNumModules();
+    for (int i = 0; i < num_modules; i++) {
+      lldb::SBModule curr_module = m_lldb_provider.target.GetModuleAtIndex(i);
+      if (args->moduleId == llvm::StringRef(curr_module.GetUUIDString())) {
+        const int num_units = curr_module.GetNumCompileUnits();
+        for (int j = 0; j < num_units; j++) {
+          lldb::SBCompileUnit curr_unit = curr_module.GetCompileUnitAtIndex(j);
+          char unit_path_arr[PATH_MAX];
+          curr_unit.GetFileSpec().GetPath(unit_path_arr, sizeof(unit_path_arr));
+          units.emplace_back(protocol::CompileUnit{std::string(unit_path_arr)});
+        }
+        break;
       }
-      break;
     }
-  }
-  return protocol::CompileUnitsResponseBody{std::move(units)};
+    return protocol::CompileUnitsResponseBody{std::move(units)};
+  });
 }
 
 llvm::Expected<protocol::ModulesResponseBody>
 ModuleManager::GetModulesRequest(const std::optional<protocol::ModulesArguments> &) {
-  lldb::SBMutex lock = m_lldb_provider.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> api_guard(lock);
-  std::lock_guard<std::mutex> guard(modules_mutex);
+  // modules_mutex is nested inside WithTarget()'s lock, matching the fixed
+  // order ExecutionController::HandleTargetEvent uses for the same pair -
+  // see the comment there.
+  return m_lldb_provider.WithTarget([&]() {
+    std::lock_guard<std::mutex> guard(modules_mutex);
 
-  protocol::ModulesResponseBody response;
-  const uint32_t total_modules = m_lldb_provider.target.GetNumModules();
-  response.totalModules = total_modules;
+    protocol::ModulesResponseBody response;
+    const uint32_t total_modules = m_lldb_provider.target.GetNumModules();
+    response.totalModules = total_modules;
 
-  response.modules.reserve(total_modules);
-  for (uint32_t i = 0; i < total_modules; i++) {
-    lldb::SBModule module = m_lldb_provider.target.GetModuleAtIndex(i);
-    std::optional<protocol::Module> result = CreateModuleDescription(module);
-    if (result && !result->id.empty()) {
-      modules.insert(result->id);
-      response.modules.emplace_back(std::move(result).value());
+    response.modules.reserve(total_modules);
+    for (uint32_t i = 0; i < total_modules; i++) {
+      lldb::SBModule module = m_lldb_provider.target.GetModuleAtIndex(i);
+      std::optional<protocol::Module> result = CreateModuleDescription(module);
+      if (result && !result->id.empty()) {
+        modules.insert(result->id);
+        response.modules.emplace_back(std::move(result).value());
+      }
     }
-  }
-  return response;
+    return response;
+  });
 }
 
 llvm::Expected<protocol::ModuleSymbolsResponseBody>
 ModuleManager::GetModuleSymbolsRequest(const protocol::ModuleSymbolsArguments &args) {
-  lldb::SBMutex lock = m_lldb_provider.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_lldb_provider.WithTarget([&]() -> llvm::Expected<protocol::ModuleSymbolsResponseBody> {
+    protocol::ModuleSymbolsResponseBody response;
 
-  protocol::ModuleSymbolsResponseBody response;
-
-  lldb::SBModuleSpec module_spec;
-  if (!args.moduleId.empty()) {
-    llvm::SmallVector<uint8_t, 20> uuid_bytes;
-    if (!DecodeUUIDBytesFromString(args.moduleId, uuid_bytes).empty())
-      return llvm::make_error<dap::DAPError>("invalid module ID");
-    module_spec.SetUUIDBytes(uuid_bytes.data(), uuid_bytes.size());
-  }
-
-  if (!args.moduleName.empty()) {
-    lldb::SBFileSpec file_spec;
-    file_spec.SetFilename(args.moduleName.c_str());
-    module_spec.SetFileSpec(file_spec);
-  }
-
-  if (!module_spec.IsValid())
-    return response;
-
-  lldb::SBModule module = m_lldb_provider.target.FindModule(module_spec);
-  if (!module.IsValid())
-    return llvm::make_error<dap::DAPError>("module not found");
-
-  std::vector<protocol::Symbol> &symbols = response.symbols;
-  const size_t num_symbols = module.GetNumSymbols();
-  const size_t start_index = args.startIndex.value_or(0);
-  const size_t end_index = std::min(start_index + args.count.value_or(num_symbols), num_symbols);
-  for (size_t i = start_index; i < end_index; ++i) {
-    lldb::SBSymbol symbol = module.GetSymbolAtIndex(i);
-    if (!symbol.IsValid())
-      continue;
-
-    protocol::Symbol dap_symbol;
-    dap_symbol.id = symbol.GetID();
-    // dap::protocol::SymbolType mirrors lldb::SymbolType value-for-value, so
-    // this cast is exact.
-    dap_symbol.type = static_cast<protocol::SymbolType>(symbol.GetType());
-    dap_symbol.isDebug = symbol.IsDebug();
-    dap_symbol.isSynthetic = symbol.IsSynthetic();
-    dap_symbol.isExternal = symbol.IsExternal();
-
-    lldb::SBAddress start_address = symbol.GetStartAddress();
-    if (start_address.IsValid()) {
-      if (lldb::addr_t file_address = start_address.GetFileAddress(); file_address != LLDB_INVALID_ADDRESS)
-        dap_symbol.fileAddress = file_address;
-
-      if (lldb::addr_t load_address = start_address.GetLoadAddress(m_lldb_provider.target);
-          load_address != LLDB_INVALID_ADDRESS)
-        dap_symbol.loadAddress = load_address;
+    lldb::SBModuleSpec module_spec;
+    if (!args.moduleId.empty()) {
+      llvm::SmallVector<uint8_t, 20> uuid_bytes;
+      if (!DecodeUUIDBytesFromString(args.moduleId, uuid_bytes).empty())
+        return llvm::make_error<dap::DAPError>("invalid module ID");
+      module_spec.SetUUIDBytes(uuid_bytes.data(), uuid_bytes.size());
     }
 
-    dap_symbol.size = symbol.GetSize();
-    if (const char *symbol_name = symbol.GetName())
-      dap_symbol.name = symbol_name;
-    symbols.push_back(std::move(dap_symbol));
-  }
+    if (!args.moduleName.empty()) {
+      lldb::SBFileSpec file_spec;
+      file_spec.SetFilename(args.moduleName.c_str());
+      module_spec.SetFileSpec(file_spec);
+    }
 
-  return response;
+    if (!module_spec.IsValid())
+      return response;
+
+    lldb::SBModule module = m_lldb_provider.target.FindModule(module_spec);
+    if (!module.IsValid())
+      return llvm::make_error<dap::DAPError>("module not found");
+
+    std::vector<protocol::Symbol> &symbols = response.symbols;
+    const size_t num_symbols = module.GetNumSymbols();
+    const size_t start_index = args.startIndex.value_or(0);
+    const size_t end_index = std::min(start_index + args.count.value_or(num_symbols), num_symbols);
+    for (size_t i = start_index; i < end_index; ++i) {
+      lldb::SBSymbol symbol = module.GetSymbolAtIndex(i);
+      if (!symbol.IsValid())
+        continue;
+
+      protocol::Symbol dap_symbol;
+      dap_symbol.id = symbol.GetID();
+      // dap::protocol::SymbolType mirrors lldb::SymbolType value-for-value, so
+      // this cast is exact.
+      dap_symbol.type = static_cast<protocol::SymbolType>(symbol.GetType());
+      dap_symbol.isDebug = symbol.IsDebug();
+      dap_symbol.isSynthetic = symbol.IsSynthetic();
+      dap_symbol.isExternal = symbol.IsExternal();
+
+      lldb::SBAddress start_address = symbol.GetStartAddress();
+      if (start_address.IsValid()) {
+        if (lldb::addr_t file_address = start_address.GetFileAddress(); file_address != LLDB_INVALID_ADDRESS)
+          dap_symbol.fileAddress = file_address;
+
+        if (lldb::addr_t load_address = start_address.GetLoadAddress(m_lldb_provider.target);
+            load_address != LLDB_INVALID_ADDRESS)
+          dap_symbol.loadAddress = load_address;
+      }
+
+      dap_symbol.size = symbol.GetSize();
+      if (const char *symbol_name = symbol.GetName())
+        dap_symbol.name = symbol_name;
+      symbols.push_back(std::move(dap_symbol));
+    }
+
+    return response;
+  });
 }
 
 }  // namespace core

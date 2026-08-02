@@ -1,10 +1,13 @@
 #ifndef TRAILER_DAP_ORCHESTRATOR_HPP_
 #define TRAILER_DAP_ORCHESTRATOR_HPP_
 
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 #include "dap/protocol/protocol_base.hpp"
@@ -31,24 +34,32 @@ public:
 
     IRequestHandler::FeatureSet AggregatedHandlerFeatures() const;
 
+    // Starts a reader thread (reads, decodes, enqueues) and runs the
+    // dispatch loop (pops the queue, handles one request at a time) on the
+    // calling thread until both are done. Dispatch stays single-threaded -
+    // this only decouples reading the next message from handling the
+    // current one, so a queued 'cancel' can be observed while a long
+    // request is still in flight.
     void Run();
 
-    //DO NOT INCREMENT SEQ ANY OTHER WAY
-    protocol::Id NextSeq() { return next_seq_++; }
-
+    // Locks send_mutex_ before writing. Every outbound message - response,
+    // event or reverse request - must go through this (or Send()) so writes
+    // to the wire never interleave across threads.
     bool SendMessage(const llvm::json::Value &message);
 
-    //Convenience wrapper over SendMessage for events
+    //Convenience wrapper over Send() for events
     void SendEvent(llvm::StringRef event, std::optional<llvm::json::Value> body = std::nullopt);
 
-    void RequestStop() { done_ = true; }
+    // Interrupts the reader thread's blocking read - the dispatch loop then
+    // winds down on its own once the queue drains.
+    void RequestStop() { transport_.RequestStop(); }
 
     //Assigns seq id and then calls SendMessage
     protocol::Id Send(protocol::Message message);
 
-    // Cancellation is a no-op currently
-    // Run()'s loop is single-threaded and fully synchronous
-    // a cancel message can't be observed until the request would have finished
+    // Populated by the reader thread when it sees a 'cancel' request,
+    // before that request is even enqueued for dispatch - this is what
+    // lets a queued or in-flight request be observed as cancelled.
     bool IsCancelled(const protocol::Request &request) const;
     void ClearCancelRequest(const protocol::CancelArguments &args);
 
@@ -76,13 +87,36 @@ public:
     }
 
 private:
+    // Reads, decodes and enqueues messages until the transport gives up
+    // (real EOF or RequestStop()). Intercepts 'cancel' to populate
+    // cancelled_requests_ before the request is enqueued, so a request
+    // still sitting in the queue - or already dispatched - can be observed
+    // as cancelled.
+    void ReaderLoop();
+
+    // Pops one request at a time and calls HandleRequest() on it, in the
+    // order the reader enqueued them. Exits once the reader is done and the
+    // queue is empty.
+    void DispatchLoop();
+
     void HandleRequest(const protocol::Request &request);
     void SendErrorResponse(const protocol::Request &request, std::string message);
+
+    //DO NOT INCREMENT SEQ ANY OTHER WAY. Only called from Send(), under send_mutex_.
+    protocol::Id NextSeq() { return next_seq_++; }
+
+    // Writes without taking send_mutex_. Only called from Send(), which already holds it.
+    bool SendMessageLocked(const llvm::json::Value &message);
 
     Transport transport_;
     std::unordered_map<std::string, IRequestHandler *> command_handlers_;
     protocol::Id next_seq_ = 1;
-    bool done_ = false;
+
+    std::thread reader_thread_;
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::deque<protocol::Request> request_queue_;
+    bool reader_done_ = false;
 
     std::mutex send_mutex_;
 
@@ -95,9 +129,6 @@ private:
 
     std::mutex reverse_requests_mutex_;
     llvm::SmallDenseMap<int64_t, std::unique_ptr<ResponseHandler>> inflight_reverse_requests_;
-
-    //May need a lock for multi-session in the future?
-    const protocol::Request *active_request_ = nullptr;
 };
 
 }  // namespace dap

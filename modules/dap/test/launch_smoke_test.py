@@ -13,7 +13,6 @@ Usage: launch_smoke_test.py <path-to-trailer-dap> <path-to-firmware.elf>
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 try:
     import psutil
@@ -127,12 +126,15 @@ def continue_and_wait(client: Client, thread_id: int, want_trace_data: bool, max
     return client.wait_for_all(predicates, max_messages=max_messages)
 
 
-def run_trace_checks(client: Client, program_path: str, thread_id: int) -> bool:
+def run_trace_checks(client: Client, thread_id: int, main_c_path: str) -> bool:
     """launch -> trailerTraceStatus (disabled) -> trailerTraceEnable -> hit a
     breakpoint twice, checking trailerTraceData arrives before each 'stopped'
     and that the second event's bookkeeping/gap matches the first -> disable
-    stops further events. Requires the same board's dbg_h7rs_Boot.elf."""
-    main_c_path = Path(program_path).parents[3] / "Boot" / "Core" / "Src" / "main.c"
+    stops further events. main_c_path must be a path the engine itself
+    already resolved (e.g. a stackTrace frame's source.path) - the DWARF's
+    compile-dir is whatever machine built the firmware, which in general
+    has no fixed relationship to where this script or the ELF live, so it
+    can't be guessed from either."""
 
     print("-> trailerTraceStatus (expect disabled)")
     client.send("trailerTraceStatus")
@@ -553,6 +555,7 @@ def main() -> int:
             print(f"   real thread(s) from hardware: {threads}")
 
         frame_pc = None
+        main_c_path = None
         if thread_id is not None:
             print(f"-> stackTrace (threadId={thread_id})")
             client.send("stackTrace", {"threadId": thread_id})
@@ -566,6 +569,11 @@ def main() -> int:
                 for f in frames:
                     print(f"     #{f.get('id')} {f.get('name')} {f.get('instructionPointerReference')}")
                 frame_pc = frames[0].get("instructionPointerReference")
+                # The DWARF's own compile-dir/file paths are whatever the
+                # firmware happened to be built with - not test_resources/
+                # necessarily. The engine already resolved that for us here,
+                # so reuse it instead of guessing a path independently.
+                main_c_path = (frames[0].get("source") or {}).get("path")
 
         if frame_pc is not None:
             print(f"-> readMemory (memoryReference={frame_pc}) - exercises OpenOcdMemoryStrategy")
@@ -578,8 +586,8 @@ def main() -> int:
             else:
                 print(f"   read {len(data)} base64-encoded byte(s) via OpenOCD-backed memory access")
 
-        if thread_id is not None and ok:
-            ok = run_trace_checks(client, program_path, thread_id)
+        if thread_id is not None and ok and main_c_path is not None:
+            ok = run_trace_checks(client, thread_id, main_c_path)
 
         if thread_id is not None and ok:
             ok = run_trace_status_checks(client, thread_id)

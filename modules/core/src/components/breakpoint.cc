@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <string>
 
 #include "core/components/disassembly_manager.hpp"
@@ -150,29 +149,28 @@ void Breakpoint::PruneNonCodeLocations() {
 }
 
 void Breakpoint::SetBreakpoint() {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  m_context.WithTarget([&]() {
+    PruneNonCodeLocations();
 
-  PruneNonCodeLocations();
+    // Default every breakpoint to hardware: on this project's embedded
+    // targets, a software breakpoint is a plain memory write, which silently
+    // has no effect on flash (see KNOWN_ISSUE_AUTONOMOUS_HALT_DETECTION.md).
+    // Not forced unverified on failure - whether it actually matters depends
+    // on whether the address is in flash or RAM, which isn't known here yet.
+    if (lldb::SBError hw_error = m_bp.SetIsHardware(true); hw_error.Fail()) {
+      const char *msg = hw_error.GetCString();
+      m_hardware_error =
+          msg ? std::string(msg) : "failed to allocate a hardware breakpoint";
+      m_context.LogDiagnostic(
+          "breakpoint " + std::to_string(m_bp.GetID()) + ": " + m_hardware_error);
+    }
 
-  // Default every breakpoint to hardware: on this project's embedded
-  // targets, a software breakpoint is a plain memory write, which silently
-  // has no effect on flash (see KNOWN_ISSUE_AUTONOMOUS_HALT_DETECTION.md).
-  // Not forced unverified on failure - whether it actually matters depends
-  // on whether the address is in flash or RAM, which isn't known here yet.
-  if (lldb::SBError hw_error = m_bp.SetIsHardware(true); hw_error.Fail()) {
-    const char *msg = hw_error.GetCString();
-    m_hardware_error =
-        msg ? std::string(msg) : "failed to allocate a hardware breakpoint";
-    m_context.LogDiagnostic(
-        "breakpoint " + std::to_string(m_bp.GetID()) + ": " + m_hardware_error);
-  }
-
-  m_bp.AddName(kDAPBreakpointLabel);
-  if (!m_condition.empty())
-    SetCondition();
-  if (!m_hit_condition.empty())
-    SetHitCondition();
+    m_bp.AddName(kDAPBreakpointLabel);
+    if (!m_condition.empty())
+      SetCondition();
+    if (!m_hit_condition.empty())
+      SetHitCondition();
+  });
 }
 
 }  // namespace core

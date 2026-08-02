@@ -7,6 +7,7 @@
 #include "dap/protocol/protocol_requests.hpp"
 #include "lldb/API/SBType.h"
 #include "lldb/API/SBValue.h"
+#include "lldb/lldb-types.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace core {
@@ -35,6 +36,11 @@ struct VariableDescription {
 };
 
 bool ValuePointsToCode(lldb::SBValue v);
+
+// GetLoadAddress(), but with the register-resident-scalar fallback (see
+// DataManager::GetEvaluateRequest) treated as no address. Shared by every
+// call site that reports a variable's memory address.
+lldb::addr_t GetRealLoadAddress(lldb::SBValue value);
 
 }  // namespace core
 

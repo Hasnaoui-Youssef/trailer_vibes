@@ -69,6 +69,8 @@ target_link_libraries(dap_core PUBLIC
 
 target_compile_features(dap_core PUBLIC cxx_std_23)
 
+add_subdirectory(test)
+
 # --- dap_handlers ------------------------------------------------------------
 # Every concrete DAP request handler, grouped by domain.
 
@@ -126,11 +128,12 @@ add_library(dap_handlers
         src/handlers/trace/trace_disable_request_handler.cc
         src/handlers/trace/trace_status_request_handler.cc
 
+        src/handlers/watch/watch_start_request_handler.cc
+        src/handlers/watch/watch_stop_request_handler.cc
+
         src/handlers/unknown_request_handler.cc
 )
 
-# PRIVATE: nothing outside this target includes "handlers/*.hpp" - dap_main.cc
-# only needs dap::Session/CreateSession from the public dap/session.hpp.
 target_include_directories(dap_handlers PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )

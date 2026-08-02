@@ -132,7 +132,11 @@ VariableDescription::VariableDescription(
       current_format == lldb::eFormatDefault ||
       current_format == lldb::eFormatHex) {
 
-    val.SetFormat(format_hex ? lldb::eFormatHex : lldb::eFormatDefault);
+    // Pointers are always shown in hex - a decimal address isn't useful for
+    // embedded debugging - independent of format_hex, which is the
+    // client's decimal/hex display toggle for everything else.
+    const bool use_hex = format_hex || type_obj.IsPointerType();
+    val.SetFormat(use_hex ? lldb::eFormatHex : lldb::eFormatDefault);
   }
 
   llvm::raw_string_ostream os_display_value(display_value);
@@ -186,6 +190,24 @@ std::string VariableDescription::GetResult(dap::protocol::EvaluateContext contex
     val.GetDescription(stream, lldb::eDescriptionLevelBrief);
   llvm::StringRef description = stream.GetData();
   return description.trim().str();
+}
+
+lldb::addr_t GetRealLoadAddress(lldb::SBValue value) {
+  lldb::addr_t addr = value.GetLoadAddress();
+  // GetLoadAddress() has no way to report "this variable has no memory
+  // address" for a register-resident scalar (a small local the compiler
+  // never spilled to memory) - instead of failing, it falls back to
+  // reinterpreting the variable's own value as an address, so the
+  // "address" it reports is identical to the value. A real variable's
+  // address coinciding exactly with its own value would be an absurd
+  // coincidence, so that equality is a reliable enough signal to treat as
+  // no address at all. Pointers are exempt: for a pointer, GetLoadAddress()
+  // correctly returns the pointee address, which legitimately equals the
+  // pointer's own value.
+  if (addr != LLDB_INVALID_ADDRESS && !value.GetType().IsPointerType() &&
+      addr == value.GetValueAsUnsigned(LLDB_INVALID_ADDRESS))
+    return LLDB_INVALID_ADDRESS;
+  return addr;
 }
 
 bool ValuePointsToCode(lldb::SBValue v) {

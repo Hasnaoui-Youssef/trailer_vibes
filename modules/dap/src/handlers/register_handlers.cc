@@ -58,6 +58,8 @@ std::vector<std::unique_ptr<BaseRequestHandler>> RegisterDebugHandlers(Orchestra
     Register<TraceDisableRequestHandler>(orchestrator, context, handlers);
     Register<TraceStatusRequestHandler>(orchestrator, context, handlers);
     Register<VariablesRequestHandler>(orchestrator, context, handlers);
+    Register<WatchStartRequestHandler>(orchestrator, context, handlers);
+    Register<WatchStopRequestHandler>(orchestrator, context, handlers);
     Register<WriteMemoryRequestHandler>(orchestrator, context, handlers);
 
     Register<UnknownRequestHandler>(orchestrator, context, handlers);

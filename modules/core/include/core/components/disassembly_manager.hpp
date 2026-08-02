@@ -13,7 +13,11 @@
 #define TRAILER_CORE_COMPONENTS_DISASSEMBLY_MANAGER_HPP_
 
 #include <cstdint>
-#include <optional>
+#include <expected>
+#include <future>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "dap/protocol/protocol_requests.hpp"
@@ -29,6 +33,7 @@ class DebugContext;
 class DisassemblyManager {
 public:
   explicit DisassemblyManager(DebugContext &context) : m_context(context) {}
+  ~DisassemblyManager();
 
   static constexpr uint32_t k_number_of_assembly_lines_for_nodebug = 32;
 
@@ -39,16 +44,23 @@ public:
   llvm::Expected<dap::protocol::SourceResponseBody> GetSourceRequest(
       const dap::protocol::SourceArguments &args);
 
-  // Lazily loads and precomputes disassembler::ProgramDisassembler for the
-  // session's program, caching it - the whole-image LLVM/DWARF precompute
-  // must happen once per session, not once per caller.
+  // Waits for the whole-image LLVM/DWARF precompute that InvalidateProgram()
+  // starts on a dedicated worker thread, then returns the cached result.
+  // Called from the dispatch thread and from the trace-decode worker thread,
+  // so access to the shared future is guarded by m_mutex - the future's own
+  // value access (get()) is safe to call concurrently on its own.
   llvm::Expected<const disasm::ProgramDisassembler &> Program();
+
+  // (Re)starts the precompute worker for the session's current program path.
+  // Must be called whenever the program changes (or first becomes known) -
+  // Program() never computes anything itself, only waits.
   void InvalidateProgram();
 
 private:
   DebugContext &m_context;
-  std::optional<disasm::ProgramDisassembler> program_;
-  std::string program_path_;
+  std::mutex m_mutex;
+  std::thread program_worker_;
+  std::shared_future<std::expected<disasm::ProgramDisassembler, std::string>> program_future_;
 };
 
 }  // namespace core

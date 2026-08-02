@@ -12,6 +12,7 @@
 #include "disassembler/program_disassembler.hpp"
 #include "handlers/capabilities.hpp"
 #include "handlers/register_handlers.hpp"
+#include "llvm/Support/Base64.h"
 #include "llvm/Support/JSON.h"
 #include <mutex>
 #include <variant>
@@ -163,6 +164,27 @@ private:
     }
 
     void HandleDomainEvent(const core::TraceStatusEvent &event) { SendTypedEvent("trailerTraceStatus", event.body); }
+
+    void HandleDomainEvent(const core::WatchDataEvent &event) {
+        orchestrator_.Send(dap::protocol::Event{
+            "trailerWatchData",
+            llvm::json::Object{
+                {"watchId", event.watch_id},
+                {"address", EncodeMemoryReference(event.address)},
+                {"data", llvm::encodeBase64(event.data)},
+                {"sequence", event.sequence},
+            }});
+    }
+
+    void HandleDomainEvent(const core::WatchStateEvent &event) {
+        llvm::json::Object body{
+            {"watchId", event.watch_id},
+            {"state", event.active ? "active" : "error"},
+        };
+        if (!event.detail.empty())
+            body["detail"] = event.detail;
+        orchestrator_.Send(dap::protocol::Event{"trailerWatchState", llvm::json::Value(std::move(body))});
+    }
 
     void HandleDomainEvent(const core::TraceDataEvent &event) {
         llvm::Expected<const disasm::ProgramDisassembler &> program = context_.Disassembly().Program();

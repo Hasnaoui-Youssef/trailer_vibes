@@ -149,105 +149,125 @@ DisassemblyManager::Disassemble(lldb::addr_t memory_reference, int64_t byte_offs
   if (memory_reference == LLDB_INVALID_ADDRESS) {
     return std::vector<protocol::DisassembledInstruction>(instruction_count, GetInvalidInstruction());
   }
-  const lldb::addr_t addr_ptr = memory_reference + byte_offset;
-  lldb::SBAddress addr(addr_ptr, m_context.Target());
-  if (!addr.IsValid())
-    return llvm::make_error<dap::DAPError>("Memory reference not found in the current binary.");
+  return m_context.WithTarget([&]() -> llvm::Expected<std::vector<protocol::DisassembledInstruction>> {
+    const lldb::addr_t addr_ptr = memory_reference + byte_offset;
+    lldb::SBAddress addr(addr_ptr, m_context.Target());
+    if (!addr.IsValid())
+      return llvm::make_error<dap::DAPError>("Memory reference not found in the current binary.");
 
-  // Calculate a sufficient address to start disassembling from.
-  lldb::SBAddress disassemble_start_addr =
-      GetDisassembleStartAddress(m_context.Target(), addr, instruction_offset);
-  if (!disassemble_start_addr.IsValid())
-    return llvm::make_error<dap::DAPError>("Unexpected error while disassembling instructions.");
+    // Calculate a sufficient address to start disassembling from.
+    lldb::SBAddress disassemble_start_addr =
+        GetDisassembleStartAddress(m_context.Target(), addr, instruction_offset);
+    if (!disassemble_start_addr.IsValid())
+      return llvm::make_error<dap::DAPError>("Unexpected error while disassembling instructions.");
 
-  lldb::SBInstructionList insts = m_context.Target().ReadInstructions(disassemble_start_addr, instruction_count);
-  if (!insts.IsValid())
-    return llvm::make_error<dap::DAPError>("Unexpected error while disassembling instructions.");
+    lldb::SBInstructionList insts = m_context.Target().ReadInstructions(disassemble_start_addr, instruction_count);
+    if (!insts.IsValid())
+      return llvm::make_error<dap::DAPError>("Unexpected error while disassembling instructions.");
 
-  // Convert the found instructions to the DAP format.
-  std::vector<protocol::DisassembledInstruction> instructions;
-  size_t original_address_index = instruction_count;
-  for (size_t i = 0; i < insts.GetSize(); ++i) {
-    lldb::SBInstruction inst = insts.GetInstructionAtIndex(i);
-    if (inst.GetAddress() == addr)
-      original_address_index = i;
+    // Convert the found instructions to the DAP format.
+    std::vector<protocol::DisassembledInstruction> instructions;
+    size_t original_address_index = instruction_count;
+    for (size_t i = 0; i < insts.GetSize(); ++i) {
+      lldb::SBInstruction inst = insts.GetInstructionAtIndex(i);
+      if (inst.GetAddress() == addr)
+        original_address_index = i;
 
-    instructions.push_back(ConvertSBInstructionToDisassembledInstruction(m_context, inst, resolve_symbols));
-  }
-
-  // Check if we miss instructions at the beginning.
-  if (instruction_offset < 0) {
-    const auto backwards_instructions_count = static_cast<size_t>(std::abs(instruction_offset));
-    if (original_address_index < backwards_instructions_count) {
-      // We don't have enough instructions before the main address as was
-      // requested. Let's pad the start of the instructions with invalid
-      // instructions.
-      std::vector<protocol::DisassembledInstruction> invalid_instructions(
-          backwards_instructions_count - original_address_index, GetInvalidInstruction());
-      instructions.insert(instructions.begin(), invalid_instructions.begin(), invalid_instructions.end());
-
-      // Trim excess instructions if needed.
-      if (instructions.size() > instruction_count)
-        instructions.resize(instruction_count);
+      instructions.push_back(ConvertSBInstructionToDisassembledInstruction(m_context, inst, resolve_symbols));
     }
-  }
 
-  // Pad the instructions with invalid instructions if needed.
-  while (instructions.size() < instruction_count)
-    instructions.push_back(GetInvalidInstruction());
+    // Check if we miss instructions at the beginning.
+    if (instruction_offset < 0) {
+      const auto backwards_instructions_count = static_cast<size_t>(std::abs(instruction_offset));
+      if (original_address_index < backwards_instructions_count) {
+        // We don't have enough instructions before the main address as was
+        // requested. Let's pad the start of the instructions with invalid
+        // instructions.
+        std::vector<protocol::DisassembledInstruction> invalid_instructions(
+            backwards_instructions_count - original_address_index, GetInvalidInstruction());
+        instructions.insert(instructions.begin(), invalid_instructions.begin(), invalid_instructions.end());
 
-  return instructions;
+        // Trim excess instructions if needed.
+        if (instructions.size() > instruction_count)
+          instructions.resize(instruction_count);
+      }
+    }
+
+    // Pad the instructions with invalid instructions if needed.
+    while (instructions.size() < instruction_count)
+      instructions.push_back(GetInvalidInstruction());
+
+    return instructions;
+  });
 }
 
 llvm::Expected<protocol::SourceResponseBody>
 DisassemblyManager::GetSourceRequest(const protocol::SourceArguments &args) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Expected<protocol::SourceResponseBody> {
+    const uint32_t source_ref =
+        args.source ? args.source->sourceReference.value_or(args.sourceReference) : args.sourceReference;
+    const std::optional<lldb::addr_t> source_addr_opt = m_context.GetSourceReferenceAddress(source_ref);
+    if (!source_addr_opt)
+      return llvm::make_error<dap::DAPError>(llvm::formatv("unknown source reference {}", source_ref));
 
-  const uint32_t source_ref =
-      args.source ? args.source->sourceReference.value_or(args.sourceReference) : args.sourceReference;
-  const std::optional<lldb::addr_t> source_addr_opt = m_context.GetSourceReferenceAddress(source_ref);
-  if (!source_addr_opt)
-    return llvm::make_error<dap::DAPError>(llvm::formatv("unknown source reference {}", source_ref));
+    lldb::SBAddress address(*source_addr_opt, m_context.Target());
+    if (!address.IsValid())
+      return llvm::make_error<dap::DAPError>("source not found");
 
-  lldb::SBAddress address(*source_addr_opt, m_context.Target());
-  if (!address.IsValid())
-    return llvm::make_error<dap::DAPError>("source not found");
+    lldb::SBSymbol symbol = address.GetSymbol();
+    lldb::SBInstructionList insts;
+    if (symbol.IsValid())
+      insts = symbol.GetInstructions(m_context.Target());
+    else
+      insts = m_context.Target().ReadInstructions(address, k_number_of_assembly_lines_for_nodebug);
 
-  lldb::SBSymbol symbol = address.GetSymbol();
-  lldb::SBInstructionList insts;
-  if (symbol.IsValid())
-    insts = symbol.GetInstructions(m_context.Target());
-  else
-    insts = m_context.Target().ReadInstructions(address, k_number_of_assembly_lines_for_nodebug);
+    if (!insts || insts.GetSize() == 0)
+      return llvm::make_error<dap::DAPError>(
+          llvm::formatv("no instruction source for address {}", address.GetLoadAddress(m_context.Target())));
 
-  if (!insts || insts.GetSize() == 0)
-    return llvm::make_error<dap::DAPError>(
-        llvm::formatv("no instruction source for address {}", address.GetLoadAddress(m_context.Target())));
+    lldb::SBStream stream;
+    lldb::SBExecutionContext exe_ctx(m_context.Target());
+    insts.GetDescription(stream, exe_ctx);
+    return protocol::SourceResponseBody{/*content=*/stream.GetData(), /*mimeType=*/"text/x-lldb.disassembly"};
+  });
+}
 
-  lldb::SBStream stream;
-  lldb::SBExecutionContext exe_ctx(m_context.Target());
-  insts.GetDescription(stream, exe_ctx);
-  return protocol::SourceResponseBody{/*content=*/stream.GetData(), /*mimeType=*/"text/x-lldb.disassembly"};
+DisassemblyManager::~DisassemblyManager() {
+  if (program_worker_.joinable())
+    program_worker_.detach();
 }
 
 llvm::Expected<const disasm::ProgramDisassembler &> DisassemblyManager::Program() {
-  const std::string &program_path = m_context.Session().configuration.program;
-  if (program_ && program_path_ == program_path)
-    return *program_;
+  std::shared_future<std::expected<disasm::ProgramDisassembler, std::string>> future;
+  {
+    std::lock_guard<std::mutex> guard(m_mutex);
+    if (!program_future_.valid())
+      return llvm::make_error<dap::DAPError>("no program configured");
+    future = program_future_;
+  }
 
-  std::expected<disasm::ProgramDisassembler, std::string> result = disasm::ProgramDisassembler::Create(program_path);
+  const std::expected<disasm::ProgramDisassembler, std::string> &result = future.get();
   if (!result)
     return llvm::make_error<dap::DAPError>(result.error());
-
-  program_ = std::move(*result);
-  program_path_ = program_path;
-  return *program_;
+  return *result;
 }
 
 void DisassemblyManager::InvalidateProgram() {
-  program_.reset();
-  program_path_.clear();
+  std::lock_guard<std::mutex> guard(m_mutex);
+
+  // The old worker (if any) is left to finish on its own - its result, once
+  // in program_future_, is about to be overwritten below and nobody will
+  // ever wait on it again. It touches nothing but its own captured
+  // program_path copy and its own packaged_task's result storage, so
+  // detaching it is safe.
+  if (program_worker_.joinable())
+    program_worker_.detach();
+
+  std::string program_path = m_context.Session().configuration.program;
+  std::packaged_task<std::expected<disasm::ProgramDisassembler, std::string>()> task(
+      [program_path]() { return disasm::ProgramDisassembler::Create(program_path); });
+  program_future_ = task.get_future().share();
+  program_worker_ = std::thread(std::move(task));
 }
 
 }  // namespace core

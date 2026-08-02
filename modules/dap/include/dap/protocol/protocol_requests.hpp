@@ -664,6 +664,27 @@ struct TraceStatusResponseBody {
 };
 llvm::json::Value toJSON(const TraceStatusResponseBody &);
 
+struct TrailerWatchStartArguments {
+    addr_t address = LLDB_INVALID_ADDRESS;
+    uint64_t size = 0;
+    uint64_t intervalMs = 500;
+    // Empty means "whatever OpenOCD's current target is" - see
+    // providers::MemorySelector.
+    std::string target;
+};
+bool fromJSON(const llvm::json::Value &, TrailerWatchStartArguments &, llvm::json::Path);
+
+struct TrailerWatchStartResponseBody {
+    int64_t watchId = 0;
+};
+llvm::json::Value toJSON(const TrailerWatchStartResponseBody &);
+
+struct TrailerWatchStopArguments {
+    int64_t watchId = 0;
+};
+bool fromJSON(const llvm::json::Value &, TrailerWatchStopArguments &, llvm::json::Path);
+using TrailerWatchStopResponse = VoidResponse;
+
 using UnknownArguments = EmptyArguments;
 using UnknownResponseBody = VoidResponse;
 } // namespace dap::protocol

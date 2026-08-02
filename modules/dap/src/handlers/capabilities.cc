@@ -28,6 +28,7 @@ protocol::Capabilities AssembleCustomCapabilities(Orchestrator &orchestrator) {
     const llvm::DenseSet<protocol::AdapterFeature> all_custom_features = {
         protocol::eAdapterFeatureSupportsModuleSymbolsRequest,
         protocol::eAdapterFeatureSupportsTraceRequests,
+        protocol::eAdapterFeatureSupportsWatchRequests,
     };
     for (const protocol::AdapterFeature &feature : orchestrator.AggregatedHandlerFeatures()) {
         if (all_custom_features.contains(feature)) {

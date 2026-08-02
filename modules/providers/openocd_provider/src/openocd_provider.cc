@@ -233,107 +233,136 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
 
 
 std::expected<std::string, std::string> OpenOcdProvider::GetCoreName() {
-    std::string name;
-    std::string failure;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::string name;
+        std::string failure;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 for (struct target* target = all_targets; target; target = target->next) {
                     if (std::strcmp(target_type_name(target), "mem_ap") == 0) continue;
                     struct cortex_m_common* cm = target_to_cortex_m_safe(target);
                     if (!cm) {
-                        failure = "target '" + std::string(target_name(target)) + "' is not a Cortex-M core";
+                        out.failure = "target '" + std::string(target_name(target)) + "' is not a Cortex-M core";
                         return;
                     }
                     if (!cm->core_info) {
-                        failure = "target '" + std::string(target_name(target)) + "' has not been examined yet";
+                        out.failure = "target '" + std::string(target_name(target)) + "' has not been examined yet";
                         return;
                     }
-                    name = cm->core_info->name;
+                    out.name = cm->core_info->name;
                     return;
                 }
-                failure = "no non-AP target found";
+                out.failure = "no non-AP target found";
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during GetCoreName");
-    if (!failure.empty()) return std::unexpected(failure);
-    return name;
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during GetCoreName");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during GetCoreName");
+    if (!outcome->failure.empty()) return std::unexpected(outcome->failure);
+    return outcome->name;
 }
 
 std::expected<std::vector<std::byte>, std::string> OpenOcdProvider::ReadMemory(const MemorySelector& selector,
                                                                                 uint64_t address, uint32_t size) {
     struct command_context* cmd_ctx = impl_->cmd_ctx;
-    std::vector<uint8_t> buffer(size);
-    int retval = ERROR_FAIL;
-    int exit_code = 0;
 
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        int retval = ERROR_FAIL;
+        std::vector<uint8_t> buffer;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([cmd_ctx, selector, address, size]() {
+        Outcome out;
+        out.buffer.resize(size);
+        out.ok = RunGuarded(
             [&]() {
                 struct target* target = selector.target_name.empty() ? get_current_target(cmd_ctx)
                                                                        : get_target(selector.target_name.c_str());
                 if (!target) {
-                    retval = ERROR_FAIL;
+                    out.retval = ERROR_FAIL;
                     return;
                 }
-                retval = target_read_buffer(target, address, size, buffer.data());
+                out.retval = target_read_buffer(target, address, size, out.buffer.data());
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ReadMemory");
-    if (retval != ERROR_OK) return std::unexpected("target_read_buffer() failed");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during ReadMemory");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during ReadMemory");
+    if (outcome->retval != ERROR_OK) return std::unexpected("target_read_buffer() failed");
 
     std::vector<std::byte> result(size);
-    std::memcpy(result.data(), buffer.data(), size);
+    std::memcpy(result.data(), outcome->buffer.data(), size);
     return result;
 }
 
 std::expected<void, std::string> OpenOcdProvider::WriteMemory(const MemorySelector& selector, uint64_t address,
                                                                 const std::vector<std::byte>& data) {
     struct command_context* cmd_ctx = impl_->cmd_ctx;
-    int retval = ERROR_FAIL;
-    int exit_code = 0;
 
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        int retval = ERROR_FAIL;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([cmd_ctx, selector, address, data]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 struct target* target = selector.target_name.empty() ? get_current_target(cmd_ctx)
                                                                        : get_target(selector.target_name.c_str());
                 if (!target) {
-                    retval = ERROR_FAIL;
+                    out.retval = ERROR_FAIL;
                     return;
                 }
-                retval = target_write_buffer(target, address, static_cast<uint32_t>(data.size()),
-                                              reinterpret_cast<const uint8_t*>(data.data()));
+                out.retval = target_write_buffer(target, address, static_cast<uint32_t>(data.size()),
+                                                  reinterpret_cast<const uint8_t*>(data.data()));
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during WriteMemory");
-    if (retval != ERROR_OK) return std::unexpected("target_write_buffer() failed");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during WriteMemory");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during WriteMemory");
+    if (outcome->retval != ERROR_OK) return std::unexpected("target_write_buffer() failed");
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::RunTclCommand(const std::string& command) {
     struct command_context* cmd_ctx = impl_->cmd_ctx;
-    int exit_code = 0;
-    int retval = ERROR_FAIL;
 
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded([&]() { retval = command_run_line(cmd_ctx, const_cast<char*>(command.c_str())); },
-                           &exit_code);
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        int retval = ERROR_FAIL;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([cmd_ctx, command]() {
+        Outcome out;
+        out.ok = RunGuarded([&]() { out.retval = command_run_line(cmd_ctx, const_cast<char*>(command.c_str())); },
+                             &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during RunTclCommand");
-    if (retval != ERROR_OK) return std::unexpected("'" + command + "' failed");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during RunTclCommand");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during RunTclCommand");
+    if (outcome->retval != ERROR_OK) return std::unexpected("'" + command + "' failed");
     return {};
 }
 
 std::expected<std::vector<TmcObject>, std::string> OpenOcdProvider::ListTraceSinks() {
-    std::vector<TmcObject> result;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::vector<TmcObject> result;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 tmc_for_each(
                     [](struct tmc_object* obj, void* arg) {
@@ -347,19 +376,25 @@ std::expected<std::vector<TmcObject>, std::string> OpenOcdProvider::ListTraceSin
                             .ram_size_words = obj->ram_size_words,
                         });
                     },
-                    &result);
+                    &out.result);
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ListTraceSinks");
-    return result;
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during ListTraceSinks");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during ListTraceSinks");
+    return outcome->result;
 }
 
 std::expected<std::vector<Etmv4Object>, std::string> OpenOcdProvider::ListTraceSources() {
-    std::vector<Etmv4Object> result;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::vector<Etmv4Object> result;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 etmv4_for_each(
                     [](struct etmv4_object* obj, void* arg) {
@@ -373,191 +408,245 @@ std::expected<std::vector<Etmv4Object>, std::string> OpenOcdProvider::ListTraceS
                             .traceid = etmv4_object_traceid(obj),
                         });
                     },
-                    &result);
+                    &out.result);
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ListTraceSources");
-    return result;
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during ListTraceSources");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during ListTraceSources");
+    return outcome->result;
 }
 
 std::expected<model::Etmv4Registers, std::string> OpenOcdProvider::ReadETMv4Registers(const std::string& name) {
-    model::Etmv4Registers regs{};
-    std::string failure;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded([&]() {
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::string failure;
+        model::Etmv4Registers regs{};
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([name]() {
+        Outcome out;
+        out.ok = RunGuarded([&]() {
                 struct etmv4_object* obj = etmv4_find_by_name(name.c_str());
                 if (!obj) {
-                    failure = "no ETMv4 object named '" + name + "'";
+                    out.failure = "no ETMv4 object named '" + name + "'";
                     return;
                 }
                 if (!etmv4_object_initialised(obj)) {
-                    failure = "ETMv4 object '" + name + "' is not initialised";
+                    out.failure = "ETMv4 object '" + name + "' is not initialised";
                     return;
                 }
                 etmv4_decode_regs d_regs = etmv4_object_decode_regs(obj);
-                regs.trcconfigr = d_regs.trcconfigr;
-                regs.trctraceidr = d_regs.trctraceidr;
-                regs.trcidr0 = d_regs.trcidr0;
-                regs.trcidr1 = d_regs.trcidr1;
-                regs.trcidr2 = d_regs.trcidr2;
-                regs.trcidr8 = d_regs.trcidr8;
-                regs.trcidr9 = d_regs.trcidr9;
-                regs.trcidr10 = d_regs.trcidr10;
-                regs.trcidr11 = d_regs.trcidr11;
-                regs.trcidr12 = d_regs.trcidr12;
-                regs.trcidr13 = d_regs.trcidr13;
-                regs.trcidr3 = d_regs.trcidr3;
-                regs.trcidr4 = d_regs.trcidr4;
-                regs.trcidr5 = d_regs.trcidr5;
-                regs.trcidr6 = d_regs.trcidr6;
-                regs.trcidr7 = d_regs.trcidr7;
-                regs.trcauthstatus = d_regs.trcauthstatus;
+                out.regs.trcconfigr = d_regs.trcconfigr;
+                out.regs.trctraceidr = d_regs.trctraceidr;
+                out.regs.trcidr0 = d_regs.trcidr0;
+                out.regs.trcidr1 = d_regs.trcidr1;
+                out.regs.trcidr2 = d_regs.trcidr2;
+                out.regs.trcidr8 = d_regs.trcidr8;
+                out.regs.trcidr9 = d_regs.trcidr9;
+                out.regs.trcidr10 = d_regs.trcidr10;
+                out.regs.trcidr11 = d_regs.trcidr11;
+                out.regs.trcidr12 = d_regs.trcidr12;
+                out.regs.trcidr13 = d_regs.trcidr13;
+                out.regs.trcidr3 = d_regs.trcidr3;
+                out.regs.trcidr4 = d_regs.trcidr4;
+                out.regs.trcidr5 = d_regs.trcidr5;
+                out.regs.trcidr6 = d_regs.trcidr6;
+                out.regs.trcidr7 = d_regs.trcidr7;
+                out.regs.trcauthstatus = d_regs.trcauthstatus;
         },
-        &exit_code);
+        &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ReadETMv4Registers");
-    if (!failure.empty()) return std::unexpected(failure);
-    return regs;
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during ReadETMv4Registers");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during ReadETMv4Registers");
+    if (!outcome->failure.empty()) return std::unexpected(outcome->failure);
+    return outcome->regs;
 }
 
 std::expected<void, std::string> OpenOcdProvider::SubscribeTrace(const std::string& name, TraceDataCallback callback) {
-    std::string failure;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded([&]() {
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::string failure;
+    };
+    Impl* impl = impl_.get();
+    std::optional<Outcome> outcome = impl_->queue.RunSync([impl, name, callback = std::move(callback)]() mutable {
+        Outcome out;
+        out.ok = RunGuarded([&]() {
                 struct tmc_object* obj = tmc_find_by_name(name.c_str());
                 if (!obj) {
-                    failure = "no TMC object named '" + name + "'";
+                    out.failure = "no TMC object named '" + name + "'";
                     return;
                 }
-                auto [it, inserted] = impl_->trace_callbacks.insert_or_assign(name, std::move(callback));
+                auto [it, inserted] = impl->trace_callbacks.insert_or_assign(name, std::move(callback));
                 tmc_set_capture_callback(obj, &TraceCallbackTrampoline, &it->second);
         },
-        &exit_code);
+        &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during SubscribeTrace");
-    if (!failure.empty()) return std::unexpected(failure);
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during SubscribeTrace");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during SubscribeTrace");
+    if (!outcome->failure.empty()) return std::unexpected(outcome->failure);
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::UnsubscribeTrace(const std::string& name) {
-    std::string failure;
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded([&]() {
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        std::string failure;
+    };
+    Impl* impl = impl_.get();
+    std::optional<Outcome> outcome = impl_->queue.RunSync([impl, name]() {
+        Outcome out;
+        out.ok = RunGuarded([&]() {
                 struct tmc_object* obj = tmc_find_by_name(name.c_str());
                 if (!obj) {
-                    failure = "no TMC object named '" + name + "'";
+                    out.failure = "no TMC object named '" + name + "'";
                     return;
                 }
                 tmc_clear_capture_callback(obj);
-                impl_->trace_callbacks.erase(name);
+                impl->trace_callbacks.erase(name);
         },
-        &exit_code);
+        &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during UnsubscribeTrace");
-    if (!failure.empty()) return std::unexpected(failure);
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during UnsubscribeTrace");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during UnsubscribeTrace");
+    if (!outcome->failure.empty()) return std::unexpected(outcome->failure);
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::SubscribeTargetState(TargetStateCallback callback) {
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+    };
+    Impl* impl = impl_.get();
+    std::optional<Outcome> outcome = impl_->queue.RunSync([impl, callback = std::move(callback)]() mutable {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
-                const bool already_registered = static_cast<bool>(impl_->target_state_callback);
-                impl_->target_state_callback = std::move(callback);
+                const bool already_registered = static_cast<bool>(impl->target_state_callback);
+                impl->target_state_callback = std::move(callback);
                 if (!already_registered)
-                    target_register_event_callback(&TargetStateTrampoline, &impl_->target_state_callback);
+                    target_register_event_callback(&TargetStateTrampoline, &impl->target_state_callback);
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during SubscribeTargetState");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during SubscribeTargetState");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during SubscribeTargetState");
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::UnsubscribeTargetState() {
-    int exit_code = 0;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+    };
+    Impl* impl = impl_.get();
+    std::optional<Outcome> outcome = impl_->queue.RunSync([impl]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
-                target_unregister_event_callback(&TargetStateTrampoline, &impl_->target_state_callback);
-                impl_->target_state_callback = nullptr;
+                target_unregister_event_callback(&TargetStateTrampoline, &impl->target_state_callback);
+                impl->target_state_callback = nullptr;
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during UnsubscribeTargetState");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during UnsubscribeTargetState");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during UnsubscribeTargetState");
     return {};
 }
 
 
 std::expected<void, std::string> OpenOcdProvider::ConfigureTrace(const std::string& name, const std::string& options) {
     struct command_context* cmd_ctx = impl_->cmd_ctx;
-    int exit_code = 0;
-    int retval = ERROR_FAIL;
 
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        int retval = ERROR_FAIL;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([cmd_ctx, name, options]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 std::string line = name + " configure " + options;
-                retval = command_run_line(cmd_ctx, const_cast<char*>(line.c_str()));
+                out.retval = command_run_line(cmd_ctx, const_cast<char*>(line.c_str()));
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during ConfigureTrace");
-    if (retval != ERROR_OK) return std::unexpected("'" + name + " configure " + options + "' failed");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during ConfigureTrace");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during ConfigureTrace");
+    if (outcome->retval != ERROR_OK) return std::unexpected("'" + name + " configure " + options + "' failed");
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::EnableTrace(const std::string& name) {
-    int exit_code = 0;
-    bool found = false;
-    int retval = ERROR_OK;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        bool found = false;
+        int retval = ERROR_OK;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([name]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) {
-                    found = true;
-                    retval = tmc_enable(tmc);
+                    out.found = true;
+                    out.retval = tmc_enable(tmc);
                     return;
                 }
                 if (struct etmv4_object* etmv4 = etmv4_find_by_name(name.c_str())) {
-                    found = true;
-                    retval = etmv4_enable(etmv4);
+                    out.found = true;
+                    out.retval = etmv4_enable(etmv4);
                 }
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during EnableTrace");
-    if (!found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
-    if (retval != ERROR_OK) return std::unexpected("'" + name + "' failed to enable");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during EnableTrace");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during EnableTrace");
+    if (!outcome->found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
+    if (outcome->retval != ERROR_OK) return std::unexpected("'" + name + "' failed to enable");
     return {};
 }
 
 std::expected<void, std::string> OpenOcdProvider::DisableTrace(const std::string& name) {
-    int exit_code = 0;
-    bool found = false;
-    int retval = ERROR_OK;
-    bool ok = impl_->queue.RunSync([&]() {
-        return RunGuarded(
+    struct Outcome {
+        bool ok = false;
+        int exit_code = 0;
+        bool found = false;
+        int retval = ERROR_OK;
+    };
+    std::optional<Outcome> outcome = impl_->queue.RunSync([name]() {
+        Outcome out;
+        out.ok = RunGuarded(
             [&]() {
                 if (struct tmc_object* tmc = tmc_find_by_name(name.c_str())) {
-                    found = true;
-                    retval = tmc_disable(tmc);
+                    out.found = true;
+                    out.retval = tmc_disable(tmc);
                     return;
                 }
                 if (struct etmv4_object* etmv4 = etmv4_find_by_name(name.c_str())) {
-                    found = true;
-                    retval = etmv4_disable(etmv4);
+                    out.found = true;
+                    out.retval = etmv4_disable(etmv4);
                 }
             },
-            &exit_code);
+            &out.exit_code);
+        return out;
     });
-    if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during DisableTrace");
-    if (!found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
-    if (retval != ERROR_OK) return std::unexpected("'" + name + "' failed to disable");
+    if (!outcome) return std::unexpected("timed out waiting for OpenOCD during DisableTrace");
+    if (!outcome->ok) return std::unexpected("openocd_exit(" + std::to_string(outcome->exit_code) + ") during DisableTrace");
+    if (!outcome->found) return std::unexpected("no TMC or ETMv4 object named '" + name + "'");
+    if (outcome->retval != ERROR_OK) return std::unexpected("'" + name + "' failed to disable");
     return {};
 }
 

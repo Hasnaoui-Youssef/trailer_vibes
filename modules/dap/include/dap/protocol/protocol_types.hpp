@@ -329,8 +329,12 @@ enum AdapterFeature : unsigned {
   /// `trailerTraceDisable`, and `trailerTraceStatus` requests, and emits
   /// `trailerTraceData` events. These are custom requests of trailer.
   eAdapterFeatureSupportsTraceRequests,
+  /// The debug adapter supports the `trailerWatchStart` and
+  /// `trailerWatchStop` requests, and emits `trailerWatchData` and
+  /// `trailerWatchState` events. These are custom requests of trailer.
+  eAdapterFeatureSupportsWatchRequests,
   eAdapterFeatureFirst = eAdapterFeatureANSIStyling,
-  eAdapterFeatureLast = eAdapterFeatureSupportsTraceRequests,
+  eAdapterFeatureLast = eAdapterFeatureSupportsWatchRequests,
 };
 bool fromJSON(const llvm::json::Value &, AdapterFeature &, llvm::json::Path);
 llvm::json::Value toJSON(const AdapterFeature &);
@@ -1009,6 +1013,11 @@ struct Variable {
   /// This reference shares the same lifetime as the `variablesReference`. See
   /// 'Lifetime of Object References' in the Overview section for details.
   uint64_t valueLocationReference = 0;
+
+  /// Non-standard trailer extension: the variable's size in bytes. Lets a
+  /// client (e.g. a "see in memory" action) size a memory view around this
+  /// variable without a separate round trip. 0 if unknown.
+  uint64_t byteSize = 0;
 };
 llvm::json::Value toJSON(const Variable &);
 bool fromJSON(const llvm::json::Value &, Variable &, llvm::json::Path);

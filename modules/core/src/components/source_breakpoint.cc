@@ -3,7 +3,6 @@
 #include <cassert>
 #include <cctype>
 #include <cstdlib>
-#include <mutex>
 #include <utility>
 
 #include "core/variable_description.hpp"
@@ -12,7 +11,6 @@
 #include "lldb/API/SBFileSpecList.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/API/SBInstruction.h"
-#include "lldb/API/SBMutex.h"
 #include "lldb/API/SBSymbol.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/API/SBThread.h"
@@ -30,36 +28,35 @@ SourceBreakpoint::SourceBreakpoint(DebugContext &context,
       m_column(breakpoint.column.value_or(LLDB_INVALID_COLUMN_NUMBER)) {}
 
 llvm::Error SourceBreakpoint::SetBreakpoint(const protocol::Source &source) {
-  lldb::SBMutex lock = m_context.GetAPIMutex();
-  std::lock_guard<lldb::SBMutex> guard(lock);
+  return m_context.WithTarget([&]() -> llvm::Error {
+    if (m_line == 0)
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "Invalid line number.");
 
-  if (m_line == 0)
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "Invalid line number.");
-
-  if (source.sourceReference) {
-    // Breakpoint set by assembly source.
-    if (source.adapterData && source.adapterData->persistenceData) {
-      // Prefer use the adapter persitence data, because this could be a
-      // breakpoint from a previous session where the `sourceReference` is not
-      // valid anymore.
-      if (llvm::Error error = CreateAssemblyBreakpointWithPersistenceData(
-              *source.adapterData->persistenceData))
-        return error;
+    if (source.sourceReference) {
+      // Breakpoint set by assembly source.
+      if (source.adapterData && source.adapterData->persistenceData) {
+        // Prefer use the adapter persitence data, because this could be a
+        // breakpoint from a previous session where the `sourceReference` is not
+        // valid anymore.
+        if (llvm::Error error = CreateAssemblyBreakpointWithPersistenceData(
+                *source.adapterData->persistenceData))
+          return error;
+      } else {
+        if (llvm::Error error = CreateAssemblyBreakpointWithSourceReference(
+                *source.sourceReference))
+          return error;
+      }
     } else {
-      if (llvm::Error error = CreateAssemblyBreakpointWithSourceReference(
-              *source.sourceReference))
+      if (llvm::Error error = CreatePathBreakpoint(source))
         return error;
     }
-  } else {
-    if (llvm::Error error = CreatePathBreakpoint(source))
-      return error;
-  }
 
-  if (!m_log_message.empty())
-    SetLogMessage();
-  Breakpoint::SetBreakpoint();
-  return llvm::Error::success();
+    if (!m_log_message.empty())
+      SetLogMessage();
+    Breakpoint::SetBreakpoint();
+    return llvm::Error::success();
+  });
 }
 
 void SourceBreakpoint::UpdateBreakpoint(const SourceBreakpoint &request_bp) {
