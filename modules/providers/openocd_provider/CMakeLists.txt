@@ -33,4 +33,6 @@ add_dependencies(openocd_provider openocd_startup_tcl)
 
 target_compile_features(openocd_provider PUBLIC cxx_std_23)
 
-add_subdirectory(test)
+if(TRAILER_BUILD_TESTS)
+    add_subdirectory(test)
+endif()

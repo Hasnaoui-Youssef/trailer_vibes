@@ -52,4 +52,6 @@ target_compile_options(core PUBLIC
 
 target_compile_features(core PUBLIC cxx_std_23)
 
-add_subdirectory(test)
+if(TRAILER_BUILD_TESTS)
+    add_subdirectory(test)
+endif()

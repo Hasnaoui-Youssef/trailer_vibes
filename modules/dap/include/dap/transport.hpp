@@ -1,8 +1,13 @@
 #ifndef TRAILER_DAP_TRANSPORT_HPP_
 #define TRAILER_DAP_TRANSPORT_HPP_
 
+#include <cstddef>
 #include <optional>
 #include <string>
+#ifdef _WIN32
+#include <memory>
+#include <thread>
+#endif
 
 #include "llvm/Support/JSON.h"
 
@@ -14,7 +19,7 @@ public:
     Transport(int in_fd, int out_fd);
     ~Transport();
 
-    // Owns a self-pipe used to interrupt a blocking read from another
+    // Owns an OS handle used to interrupt a blocking read from another
     // thread - copying would double-close it, so only moves are allowed.
     Transport(const Transport &) = delete;
     Transport &operator=(const Transport &) = delete;
@@ -35,17 +40,39 @@ private:
     bool ReadHeaderLine(std::string &line);
 
     // Blocks until in_fd_ has data or RequestStop() is called. Returns
-    // false in the latter case (or on a poll error) - the caller should
+    // false in the latter case (or on a read error) - the caller should
     // give up the read immediately when this returns false.
     bool WaitForReadable();
+
+    // Consumes up to count bytes: >0 bytes read, 0 at end of input, <0 on
+    // error or after RequestStop().
+    std::ptrdiff_t ReadBytes(char *dst, size_t count);
+
+#ifdef _WIN32
+    // Unblocks the reader and returns once it has left its read. Windows
+    // refuses to close a handle with a read pending on it, so this has to
+    // complete before anything closes in_fd_.
+    void CancelReader();
+
+    // CancelReader() plus joining and releasing the thread.
+    void StopReader();
+#endif
 
     int in_fd_;
     int out_fd_;
     std::string read_buffer_;
     size_t read_pos_ = 0;
 
+#ifdef _WIN32
+    // Windows cannot wait on a pipe or console for readiness, so a thread
+    // does blocking reads and this is the buffer it hands them over through.
+    struct ReaderState;
+    std::shared_ptr<ReaderState> reader_;
+    std::thread reader_thread_;
+#else
     int stop_pipe_read_ = -1;
     int stop_pipe_write_ = -1;
+#endif
 };
 
 }  // namespace dap

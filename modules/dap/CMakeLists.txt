@@ -69,7 +69,9 @@ target_link_libraries(dap_core PUBLIC
 
 target_compile_features(dap_core PUBLIC cxx_std_23)
 
-add_subdirectory(test)
+if(TRAILER_BUILD_TESTS)
+    add_subdirectory(test)
+endif()
 
 # --- dap_handlers ------------------------------------------------------------
 # Every concrete DAP request handler, grouped by domain.

@@ -18,6 +18,7 @@ target_include_directories(device_xml PUBLIC
 
 target_include_directories(device_xml PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/generated
+    ${XSD_INCLUDE_DIR}
 )
 
 target_link_libraries(device_xml PRIVATE

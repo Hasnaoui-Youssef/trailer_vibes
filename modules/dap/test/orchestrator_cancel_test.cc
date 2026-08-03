@@ -8,6 +8,10 @@
 #include "dap/request_handler.hpp"
 #include "dap/transport.hpp"
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <unistd.h>
 
 #include <chrono>
@@ -22,6 +26,14 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace {
+
+int MakePipe(int fds[2]) {
+#ifdef _WIN32
+    return _pipe(fds, 4096, _O_BINARY);
+#else
+    return pipe(fds);
+#endif
+}
 
 int Fail(const std::string &message) {
     std::cerr << "orchestrator_cancel_test: " << message << "\n";
@@ -152,7 +164,7 @@ private:
 int main() {
     int stdin_pipe[2];
     int stdout_pipe[2];
-    if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0) return Fail("pipe() failed");
+    if (MakePipe(stdin_pipe) != 0 || MakePipe(stdout_pipe) != 0) return Fail("pipe() failed");
 
     dap::Transport transport(/*in_fd=*/stdin_pipe[0], /*out_fd=*/stdout_pipe[1]);
     dap::Orchestrator orchestrator(std::move(transport));
@@ -221,6 +233,7 @@ int main() {
     // above, none of which reach these closes anyway.
     orchestrator.RequestStop();
     if (run_thread.joinable()) run_thread.join();
+    response_reader.RequestStop();
 
     close(stdin_pipe[0]);
     close(stdin_pipe[1]);

@@ -26,4 +26,6 @@ target_compile_options(device_provider PUBLIC
 
 target_compile_features(device_provider PUBLIC cxx_std_23)
 
-add_subdirectory(test)
+if(TRAILER_BUILD_TESTS)
+    add_subdirectory(test)
+endif()
