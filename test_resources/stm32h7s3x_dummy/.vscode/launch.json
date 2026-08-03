@@ -9,9 +9,12 @@
 			"openocd": {
 				"scriptSearchDirs": ["${workspaceFolder}/../../external/openocd/tcl"],
 				"configFiles": ["board/st_nucleo_h7s.cfg"],
-				"gdbPort": "3333"
+				"gdbPort": "3333",
+				"debugLevel": 3
 			},
-			"debugAdapterExecutable": "${workspaceFolder}/../../build/trailer-dap",
+			"deviceName": "STM32H7S3L8Hx",
+			"svdPath": "${workspaceFolder}/../xml/stm32h7s.svd",
+			"debugAdapterExecutable": "C:\\Program Files\\Trailer\\trailer-dap.exe",
 			"stopOnEntry": true
 		}
 	]

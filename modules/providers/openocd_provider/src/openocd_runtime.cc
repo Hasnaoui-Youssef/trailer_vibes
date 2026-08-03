@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <format>
 #include <cstring>
 
@@ -165,11 +166,20 @@ struct command_context* CreateCommandContext() {
     return cmd_ctx;
 }
 
+namespace {
+
+std::string ToTclSafeArg(std::string path) {
+    std::ranges::replace(path, '\\', '/');
+    return "{" + path + "}";
+}
+
+}  // namespace
+
 std::vector<std::string> RegisterConfigCommands(const OpenOcdConfig& config) {
     std::vector<std::string> commands{};
     commands.reserve(config.config_files.size() + config.raw_commands.size());
     for (const auto& cfg : config.config_files) {
-        commands.push_back(std::format("script {}", cfg));
+        commands.push_back(std::format("script {}", ToTclSafeArg(cfg)));
     }
     for (const auto& cmd : config.raw_commands) {
         commands.push_back(cmd);
