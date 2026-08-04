@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <unordered_map>
 
 #include "command_queue.hpp"
@@ -12,6 +14,34 @@
 namespace providers {
 
 namespace {
+
+std::string ResolveLogFilePath(const std::string& configured_path) {
+    std::filesystem::path path(configured_path);
+    if (path.is_absolute()) {
+        return configured_path;
+    }
+
+#ifdef _WIN32
+    const char* app_data = std::getenv("LOCALAPPDATA");
+    std::filesystem::path base_dir = app_data ? std::filesystem::path(app_data) : std::filesystem::temp_directory_path();
+#else
+    const char* xdg_state = std::getenv("XDG_STATE_HOME");
+    std::filesystem::path base_dir;
+    if (xdg_state && *xdg_state) {
+        base_dir = xdg_state;
+    } else if (const char* home = std::getenv("HOME")) {
+        base_dir = std::filesystem::path(home) / ".local" / "state";
+    } else {
+        base_dir = std::filesystem::temp_directory_path();
+    }
+#endif
+    base_dir /= "Trailer";
+    std::error_code ec;
+    std::filesystem::create_directories(base_dir, ec);
+    // If this failed, the fopen() below will surface a clear "failed to open
+    // log file" error - no need to duplicate that handling here.
+    return (base_dir / path).string();
+}
 
 std::atomic<bool> g_instance_alive{false};
 
@@ -163,10 +193,11 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
 
     OpenOcdProvider provider;
 
-    provider.impl_->log_file = std::fopen(config.log_file_path.c_str(), "w");
+    const std::string log_file_path = ResolveLogFilePath(config.log_file_path);
+    provider.impl_->log_file = std::fopen(log_file_path.c_str(), "w");
     if (!provider.impl_->log_file) {
         g_instance_alive.store(false);
-        return std::unexpected("failed to open log file: " + config.log_file_path);
+        return std::unexpected("failed to open log file: " + log_file_path);
     }
 
     struct command_context* cmd_ctx = CreateCommandContext();

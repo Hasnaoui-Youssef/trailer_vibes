@@ -47,8 +47,10 @@ bool ShouldDisplayAssemblySource(lldb::SBLineEntry line_entry,
 }  // namespace
 
 std::string GetSBFileSpecPath(const lldb::SBFileSpec &file_spec) {
-  const auto directory_length = ::strlen(file_spec.GetDirectory());
-  const auto file_name_length = ::strlen(file_spec.GetFilename());
+  const char *directory = file_spec.GetDirectory();
+  const char *file_name = file_spec.GetFilename();
+  const auto directory_length = directory ? ::strlen(directory) : 0;
+  const auto file_name_length = file_name ? ::strlen(file_name) : 0;
 
   std::string path(directory_length + file_name_length + 1, '\0');
   file_spec.GetPath(path.data(), path.length() + 1);
