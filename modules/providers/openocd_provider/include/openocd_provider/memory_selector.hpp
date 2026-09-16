@@ -5,10 +5,7 @@
 
 namespace providers {
 
-// Empty target_name means "whatever OpenOCD's current target is". A target
-// name (e.g. "stm32h7x.ap0" vs "stm32h7x.cpu0") is required to reach memory
-// behind a specific AP, since routing is per-target, not per-AP - each
-// target already owns exactly one AP (see tcl/target/stm32h7rx.cfg).
+// Empty target_name means OpenOCD's current target.
 struct MemorySelector {
     std::string target_name;
 };

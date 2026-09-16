@@ -52,11 +52,50 @@ TraceRecord MakeNoSync(const OcsdTraceElement &elem) {
     return record;
 }
 
+bool IsTimestampAnchor(TraceRecordKind kind) {
+    return kind == TraceRecordKind::kInstructionRange || kind == TraceRecordKind::kException ||
+           kind == TraceRecordKind::kExceptionReturn;
+}
+
 }  // namespace
 
 ocsd_datapath_resp_t TraceRecordSink::TraceElemIn(const ocsd_trc_index_t index_sop,
                                                    const uint8_t trc_chan_id,
                                                    const OcsdTraceElement &elem) {
+    switch (elem.getType()) {
+        case OCSD_GEN_TRC_ELEM_CYCLE_COUNT:
+            if (last_anchor_index_) {
+                records_[*last_anchor_index_].cycle_count = elem.cycle_count;
+            } else {
+                dropped_elements_[elem.getType()]++;
+            }
+            return OCSD_RESP_CONT;
+
+        case OCSD_GEN_TRC_ELEM_TIMESTAMP: {
+            const std::optional<size_t> target = pending_ts_marker_index_ ? pending_ts_marker_index_ : last_anchor_index_;
+            pending_ts_marker_index_.reset();
+            if (target) {
+                TraceRecord &anchor = records_[*target];
+                anchor.timestamp = elem.timestamp;
+                if (elem.has_cc) anchor.timestamp_cycle_count = elem.cycle_count;
+            } else {
+                dropped_elements_[elem.getType()]++;
+            }
+            return OCSD_RESP_CONT;
+        }
+
+        case OCSD_GEN_TRC_ELEM_SYNC_MARKER:
+            if (elem.sync_marker.type == ELEM_MARKER_TS) {
+                pending_ts_marker_index_ = last_anchor_index_;
+            } else {
+                dropped_elements_[elem.getType()]++;
+            }
+            return OCSD_RESP_CONT;
+
+        default:
+            break;
+    }
+
     TraceRecord record;
 
     switch (elem.getType()) {
@@ -71,17 +110,27 @@ ocsd_datapath_resp_t TraceRecordSink::TraceElemIn(const ocsd_trc_index_t index_s
             break;
         case OCSD_GEN_TRC_ELEM_TRACE_ON:
             record = MakeTraceOn(elem);
+            pending_ts_marker_index_.reset();
             break;
         case OCSD_GEN_TRC_ELEM_NO_SYNC:
             record = MakeNoSync(elem);
+            pending_ts_marker_index_.reset();
             break;
         default:
+            dropped_elements_[elem.getType()]++;
             return OCSD_RESP_CONT;
     }
+
+    if (elem.has_cc) record.cycle_count = elem.cycle_count;
+    if (elem.has_ts) record.timestamp = elem.timestamp;
 
     record.index_sop = index_sop;
     record.trace_id = trc_chan_id;
     records_.push_back(record);
+
+    if (IsTimestampAnchor(record.kind)) {
+        last_anchor_index_ = records_.size() - 1;
+    }
 
     return OCSD_RESP_CONT;
 }

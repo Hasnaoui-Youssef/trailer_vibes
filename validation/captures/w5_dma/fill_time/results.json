@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w5_dma/build/w5_dma.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 630678663,
+      "t1": 630690775,
+      "delta": 12112
+    },
+    {
+      "halted": true,
+      "t0": 630690775,
+      "t1": 630697531,
+      "delta": 6756
+    },
+    {
+      "halted": true,
+      "t0": 630697531,
+      "t1": 630703086,
+      "delta": 5555
+    },
+    {
+      "halted": true,
+      "t0": 630703086,
+      "t1": 630706810,
+      "delta": 3724
+    },
+    {
+      "halted": true,
+      "t0": 630706810,
+      "t1": 630710476,
+      "delta": 3666
+    }
+  ]
+}

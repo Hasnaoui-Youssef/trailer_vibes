@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w1_baseline/build/w1_baseline.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 612983918,
+      "t1": 612995146,
+      "delta": 11228
+    },
+    {
+      "halted": true,
+      "t0": 612995146,
+      "t1": 613001125,
+      "delta": 5979
+    },
+    {
+      "halted": true,
+      "t0": 613001125,
+      "t1": 613008984,
+      "delta": 7859
+    },
+    {
+      "halted": true,
+      "t0": 613008984,
+      "t1": 613016446,
+      "delta": 7462
+    },
+    {
+      "halted": true,
+      "t0": 613016446,
+      "t1": 613023904,
+      "delta": 7458
+    }
+  ]
+}

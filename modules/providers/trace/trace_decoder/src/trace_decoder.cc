@@ -124,7 +124,8 @@ ocsd_datapath_resp_t FeedTraceData(DecodeTree &tree, std::span<const uint8_t> da
 }  // namespace
 
 std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode(
-    const model::InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments) const {
+    const model::InstructionTraceDecodeConfig &config, std::span<const model::LoadSegment> segments,
+    std::map<ocsd_gen_trc_elem_t, uint64_t> *dropped_elements) const {
     CoreArchProfileMap arch_profiles;
     const ocsd_arch_profile_t arch_profile = arch_profiles.getArchProfile(config.core_name());
     if (arch_profile.arch == ARCH_UNKNOWN) {
@@ -166,6 +167,10 @@ std::expected<std::vector<trace::TraceRecord>, std::string> TraceDecoder::Decode
     if (OCSD_DATA_RESP_IS_WARN_OR_ERR(decode_resp)) {
         std::cerr << "trace_decoder: decode completed with warnings/errors (datapath response "
                    << static_cast<int>(decode_resp) << ")\n";
+    }
+
+    if (dropped_elements != nullptr) {
+        *dropped_elements = sink.dropped_element_counts();
     }
 
     return sink.TakeRecords();

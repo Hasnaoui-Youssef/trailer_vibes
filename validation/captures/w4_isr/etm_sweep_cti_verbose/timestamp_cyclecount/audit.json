@@ -1,0 +1,151 @@
+{
+  "config": "timestamp_cyclecount",
+  "etm_extra": "-timestamp on -cyclecount on",
+  "log": [
+    {
+      "t": 0.0,
+      "event": "flashing",
+      "program": "validation/firmware/w4_isr/build/w4_isr.elf"
+    },
+    {
+      "t": 1.332,
+      "event": "launch",
+      "ok": true
+    },
+    {
+      "t": 1.535,
+      "event": "trcconfigr_before",
+      "value": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000009 \r\n\r>"
+    },
+    {
+      "t": 1.943,
+      "event": "etm_configure",
+      "etm_extra": "-timestamp on -cyclecount on",
+      "output": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.etm configure -timestamp on -cyclecount on\r\n\u0000\r>"
+    },
+    {
+      "t": 2.146,
+      "event": "trcconfigr_staged",
+      "value": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000009 \r\n\r>"
+    },
+    {
+      "t": 4.187,
+      "event": "cti_armed"
+    },
+    {
+      "t": 4.194,
+      "event": "breakpoint_set",
+      "line": 54,
+      "verified": true
+    },
+    {
+      "t": 4.55,
+      "event": "discard_loop_iteration",
+      "iteration": 1,
+      "stopped_reason": "exception",
+      "capture_bytes_so_far": 2064,
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 6.046,
+      "event": "discard_loop_iteration",
+      "iteration": 2,
+      "stopped_reason": "exception",
+      "capture_bytes_so_far": 4128,
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 7.729,
+      "event": "discard_loop_iteration",
+      "iteration": 3,
+      "stopped_reason": "exception",
+      "capture_bytes_so_far": 6192,
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 8.96,
+      "event": "discard_loop_iteration",
+      "iteration": 4,
+      "stopped_reason": "exception",
+      "capture_bytes_so_far": 8256,
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 10.089,
+      "event": "discard_loop_iteration",
+      "iteration": 5,
+      "stopped_reason": "breakpoint",
+      "capture_bytes_so_far": 8864,
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 10.092,
+      "event": "reached_steady_state",
+      "discarded_bytes": 8864
+    },
+    {
+      "t": 10.3,
+      "event": "final_measurement_armed",
+      "trcconfigr": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 10.535,
+      "event": "final_measurement_halted",
+      "stopped_reason": "exception",
+      "capture_bytes": 2064
+    },
+    {
+      "t": 10.736,
+      "event": "trcconfigr_final",
+      "value": "\ufffd\ufffd\u0003\ufffd\ufffd\u0001\ufffd\ufffd\u0003\ufffd\ufffd\u0001Open On-Chip Debugger\r\n\r> stm32h7x.cpu0 mdw 0xe0041010\r\n\u00000xe0041010: 00000819 \r\n\r>"
+    },
+    {
+      "t": 14.819,
+      "event": "capture_written",
+      "path": "validation/captures/w4_isr/etm_sweep_cti_verbose/timestamp_cyclecount/capture.bin",
+      "bytes": 2064
+    },
+    {
+      "t": 14.839,
+      "event": "decoded",
+      "instructionsReconstructed": 19,
+      "traceRecords": 34,
+      "gaps": 23,
+      "gapsByReason": {
+        "noSync": 12,
+        "traceOn": 11
+      },
+      "elementsByKind": {
+        "EndOfTrace": 1,
+        "InstructionRange": 11,
+        "NoSync": 12,
+        "PeContext": 11,
+        "TraceOn": 11
+      }
+    }
+  ],
+  "metrics": {
+    "bytesIn": 2064,
+    "decodeMs": 0.366615,
+    "elementsByKind": {
+      "EndOfTrace": 1,
+      "InstructionRange": 11,
+      "NoSync": 12,
+      "PeContext": 11,
+      "TraceOn": 11
+    },
+    "functionBlocks": 2,
+    "gaps": 23,
+    "gapsByReason": {
+      "noSync": 12,
+      "traceOn": 11
+    },
+    "instructionsReconstructed": 19,
+    "precomputeMs": 15.240104,
+    "resolveCalls": 42,
+    "traceRecords": 34,
+    "transformBlocksMs": 0.02458,
+    "transformGapsMs": 0.002028,
+    "transformInstructionsMs": 0.036093
+  }
+}

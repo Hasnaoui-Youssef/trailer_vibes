@@ -2,6 +2,7 @@
 #define TRAILER_TRACE_SINK_TRACE_RECORD_HPP_
 
 #include <cstdint>
+#include <optional>
 
 #include <opencsd.h>
 
@@ -51,6 +52,18 @@ struct TraceRecord {
     // bad packet/image, discard, end-of-trace). Marks the start of a gap in
     // the trace stream.
     unsync_info_t no_sync_reason;
+
+    // Cycle count / global timestamp riding on this record, when the source
+    // packet carried one (OpenCSD's has_cc/has_ts - these attach to any
+    // element kind, most often an instruction range, not just a dedicated
+    // cycle-count/timestamp element).
+    std::optional<uint32_t> cycle_count;
+    std::optional<uint64_t> timestamp;
+
+    // ETMv4: cycles since the last Cycle Count element, embedded in a
+    // Timestamp element. Not part of the cumulative cycle count - keep
+    // separate from cycle_count above.
+    std::optional<uint32_t> timestamp_cycle_count;
 };
 
 }  // namespace trace

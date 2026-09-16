@@ -48,33 +48,6 @@ target-to-directory mapping in `01-modules-and-layers.md`.
 
 stdout carries only DAP frames; diagnostics go to stderr (`src/dap_main.cc`).
 
-## What changed since the last architecture pass
-
-This document set was rewritten from scratch rather than patched, because
-the previous version described a mid-migration state that no longer exists:
-
-- The `trailer` trace-analysis CLI and the `debug_service` fork remnant (a
-  half-absorbed port of `lldb-dap`'s `DebugService` god-class) are both
-  gone. The migration they were mid-way through - carving domain logic out
-  of the fork into `core`'s `DebugContext` + components - is complete.
-- `core` grew from 7 components to 10: `TraceManager` and `WatchManager`
-  (engine-owned live memory polling) and `DeviceManager` (CMSIS-SVD
-  peripheral modeling) were added.
-- The manual `GetAPIMutex()`/`lock_guard` idiom that used to be repeated
-  per-method across ~25 call sites was replaced by
-  `LldbProvider::WithTarget(callable)` - a single encapsulated critical
-  section, not a lock object callers can forget to take or misplace.
-- Cancellation went from a structural no-op to real: the request reader now
-  runs on its own thread and marks a request cancelled before it is even
-  dispatched.
-- OpenOCD is no longer a stub - it's linked in-process
-  (`openocd_provider`), embedded by `TargetManager::Launch`, and backs
-  memory reads/writes, live memory/peripheral watches, and instruction
-  trace capture.
-- The device/peripheral subsystem (`device_provider`, `DeviceManager`, the
-  `trailerDeviceInfo`/`trailerPeripheral*` DAP surface) didn't exist at all
-  in the previous pass.
-
 ## Document index
 
 - `01-modules-and-layers.md` - CMake link DAG, target-to-directory map.

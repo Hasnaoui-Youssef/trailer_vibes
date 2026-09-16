@@ -1,0 +1,7 @@
+{
+  "program": "validation/firmware/w1_baseline/build/w1_baseline.elf",
+  "duration_s": 0.2,
+  "etm_extra": "",
+  "trace_events_count": 1,
+  "capture_bytes": 2064
+}

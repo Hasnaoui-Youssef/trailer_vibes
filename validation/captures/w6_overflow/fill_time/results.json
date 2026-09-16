@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w6_overflow/build/w6_overflow.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 634449975,
+      "t1": 634460935,
+      "delta": 10960
+    },
+    {
+      "halted": true,
+      "t0": 634460935,
+      "t1": 634467544,
+      "delta": 6609
+    },
+    {
+      "halted": true,
+      "t0": 634467544,
+      "t1": 634480287,
+      "delta": 12743
+    },
+    {
+      "halted": true,
+      "t0": 634480287,
+      "t1": 634493121,
+      "delta": 12834
+    },
+    {
+      "halted": true,
+      "t0": 634493121,
+      "t1": 634505953,
+      "delta": 12832
+    }
+  ]
+}

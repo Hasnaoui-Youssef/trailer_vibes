@@ -1,0 +1,78 @@
+@startuml
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+
+title Module Decomposition
+
+package "dap" #e8f4fd {
+    package "protocol" {
+        [Protocol Types]
+    }
+    [Transport]
+    [Orchestrator]
+    package "handlers" {
+        [Lifecycle]
+        [Breakpoints]
+        [Execution]
+        [Inspection]
+        [Memory]
+        [Symbols]
+        [Disassembly]
+        [Peripheral]
+        [Trace]
+        [Watch]
+    }
+    [Session]
+}
+
+package "core" #e8fde8 {
+    [DebugContext]
+    [EventBus]
+    package "components" {
+        [BreakpointManager]
+        [ExecutionController]
+        [DataManager]
+        [MemoryManager]
+        [ModuleManager]
+        [DisassemblyManager]
+        [DeviceManager]
+        [TraceManager]
+        [WatchManager]
+        [TargetManager]
+    }
+}
+
+package "providers" #fdf8e8 {
+    [LldbProvider]
+    [OpenOcdProvider]
+    package "device_provider" {
+        [DeviceIndex]
+        [DevicePack]
+        [MemoryMap]
+        package "xml" {
+            [SvdModel]
+            [SvdLoader]
+        }
+    }
+    [ProgramDisassembler]
+    package "trace" {
+        [trace_model]
+        [trace_sink]
+        [trace_decoder]
+        [trace_transform]
+        [trace_provider]
+    }
+}
+
+package "common" #f5f5f5 {
+    [Utilities]
+}
+
+dap -down-> core
+core -down-> providers
+dap ..> common
+core ..> common
+@enduml

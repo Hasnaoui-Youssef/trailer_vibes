@@ -1,0 +1,69 @@
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam packageBorderColor #666
+skinparam componentBorderColor #444
+skinparam arrowColor #333
+skinparam backgroundColor white
+skinparam linetype ortho
+
+title Global Layered Architecture
+
+package "Frontend" <<external>> #f0f0f0 {
+    [IDE / Client]
+}
+
+package "Communication Layer" #e8f4fd {
+    [Transport] as T
+    [Orchestrator] as O
+    [Request Handlers] as RH
+}
+
+package "Domain Layer" #e8fde8 {
+    [Debug Context\n(Facade)] as DC
+    [Component Managers] as CM
+    [Event Bus] as EB
+}
+
+package "Provider Layer" #fdf8e8 {
+    [Debug Provider] as DP
+    [Probe Provider] as PP
+    [Device Provider] as DVP
+    [Disassembler] as DIS
+    [Trace Subsystem] as TS
+}
+
+package "External" <<external>> #f0f0f0 {
+    [Debug Library] as LLDB
+    [Debug Probe Server] as OCD
+    [Trace Decoder Library] as OCSD
+}
+
+[IDE / Client] -down-> T : DAP over stdio
+T -down-> O
+O -down-> RH
+RH -down-> DC
+DC -down-> CM
+CM -down-> DP
+CM -down-> PP
+CM -down-> DVP
+CM -down-> DIS
+CM -down-> TS
+DP -down-> LLDB
+PP -down-> OCD
+TS -down-> OCSD
+EB -left-> O : domain events\ntranslated to\nprotocol events
+
+note right of DC
+  Single entry point for
+  all domain operations.
+  Composes all managers.
+end note
+
+note right of EB
+  Decouples event
+  producers from the
+  communication layer.
+end note
+@enduml

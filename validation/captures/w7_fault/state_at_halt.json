@@ -1,0 +1,21 @@
+{
+  "stackFrames": [
+    {
+      "column": 9,
+      "id": 524288,
+      "instructionPointerReference": "0x800042E",
+      "line": 89,
+      "moduleId": "18AF7042",
+      "name": "HardFault_Handler",
+      "source": {
+        "name": "stm32h7rsxx_it.c",
+        "path": "/home/youssef/projects/cpp_projects/trailer_vibes/engine/validation/firmware/w7_fault/Core/Src/stm32h7rsxx_it.c"
+      }
+    }
+  ],
+  "CFSR": 131072,
+  "HFSR": 1073741824,
+  "ICSR": 2051,
+  "corrupted_on_complete_pointer": 0,
+  "expected_safe_action_address": 134218556
+}

@@ -1,0 +1,40 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam sequenceArrowColor #333
+
+title Request Dispatch Sequence
+
+participant "Frontend" as F
+participant "Transport" as T
+participant "Orchestrator" as O
+participant "Handler" as H
+participant "DebugContext" as DC
+participant "ComponentManager" as CM
+
+F -> T : DAP message
+activate T
+T -> O : decoded request
+deactivate T
+activate O
+O -> O : lookup handler\nby command name
+O -> H : Run(request)
+activate H
+H -> H : parse arguments\ninto typed struct
+H -> DC : domain operation
+activate DC
+DC -> CM : delegated call
+activate CM
+CM --> DC : result
+deactivate CM
+DC --> H : result
+deactivate DC
+H -> O : send response
+deactivate H
+O -> T : encode response
+activate T
+T -> F : DAP response
+deactivate T
+deactivate O
+@enduml

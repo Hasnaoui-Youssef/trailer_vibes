@@ -1,0 +1,60 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Debug Context — Facade Pattern
+
+class DebugContext <<Facade>> {
+    + Breakpoints() : BreakpointManager
+    + Memory() : MemoryManager
+    + Disassembly() : DisassemblyManager
+    + Modules() : ModuleManager
+    + Data() : DataManager
+    + Execution() : ExecutionController
+    + Session() : TargetManager
+    + Watch() : WatchManager
+    + Device() : DeviceManager
+    + Trace() : TraceManager
+    + Events() : EventBus
+    + Emit(event)
+}
+
+class BreakpointManager
+class MemoryManager
+class DisassemblyManager
+class ModuleManager
+class DataManager
+class ExecutionController
+class TargetManager
+class WatchManager
+class DeviceManager
+class TraceManager
+class EventBus
+
+DebugContext *-down- BreakpointManager
+DebugContext *-down- MemoryManager
+DebugContext *-down- DisassemblyManager
+DebugContext *-down- ModuleManager
+DebugContext *-down- DataManager
+DebugContext *-down- ExecutionController
+DebugContext *-down- TargetManager
+DebugContext *-down- WatchManager
+DebugContext *-down- DeviceManager
+DebugContext *-down- TraceManager
+DebugContext *-down- EventBus
+
+class LldbProvider
+class OpenOcdProvider
+
+DebugContext o-right- LldbProvider
+DebugContext o-right- OpenOcdProvider
+
+note bottom of DebugContext
+  Composes all managers.
+  Each manager encapsulates
+  a single domain concern.
+end note
+@enduml

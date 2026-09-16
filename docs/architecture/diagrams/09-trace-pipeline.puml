@@ -1,0 +1,50 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam activityBorderColor #444
+
+title Trace Processing Pipeline
+
+|Capture|
+start
+:Raw trace bytes arrive\nfrom debug probe;
+
+|Accumulation|
+:TraceManager accumulates\nbytes until a decodable\nunit is ready;
+
+|Decode|
+:TraceSession submits\nbytes to protocol decoder;
+:Decoder produces a stream\nof TraceRecord values;
+
+|Transform|
+fork
+    :ReconstructedInstruction\ntransform;
+    note right
+      Expands instruction
+      ranges into individual
+      instructions using
+      precomputed data
+    end note
+fork again
+    :FunctionBlock\ntransform;
+    note right
+      Groups instructions
+      into function and
+      line blocks
+    end note
+fork again
+    :TraceGap\ntransform;
+    note right
+      Extracts discontinuity
+      markers
+    end note
+end fork
+
+|Emission|
+:TraceManager emits\ndomain event via EventBus;
+
+|Translation|
+:Session translates to\nprotocol event and\nsends to frontend;
+stop
+@enduml

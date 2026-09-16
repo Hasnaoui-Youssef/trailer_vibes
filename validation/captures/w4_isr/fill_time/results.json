@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w4_isr/build/w4_isr.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 625385318,
+      "t1": 625396527,
+      "delta": 11209
+    },
+    {
+      "halted": true,
+      "t0": 625396527,
+      "t1": 625402622,
+      "delta": 6095
+    },
+    {
+      "halted": true,
+      "t0": 625402622,
+      "t1": 625407502,
+      "delta": 4880
+    },
+    {
+      "halted": true,
+      "t0": 625407502,
+      "t1": 625411508,
+      "delta": 4006
+    },
+    {
+      "halted": true,
+      "t0": 625411508,
+      "t1": 625415270,
+      "delta": 3762
+    }
+  ]
+}

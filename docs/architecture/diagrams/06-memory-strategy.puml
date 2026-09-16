@@ -1,0 +1,46 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Memory Access — Strategy Pattern
+
+class MemoryManager {
+    + ReadMemory(address, count)
+    + WriteMemory(address, data)
+    + SetStrategy(strategy)
+}
+
+interface MemoryAccessStrategy <<interface>> {
+    + Read(address, count, selector)
+    + Write(address, data, selector)
+}
+
+class ProcessMemoryStrategy {
+    + Read(address, count, selector)
+    + Write(address, data, selector)
+}
+
+class ProbeMemoryStrategy {
+    + Read(address, count, selector)
+    + Write(address, data, selector)
+}
+
+MemoryManager o-right-> MemoryAccessStrategy : active strategy
+MemoryAccessStrategy <|.. ProcessMemoryStrategy
+MemoryAccessStrategy <|.. ProbeMemoryStrategy
+
+class DebugProvider
+class ProbeProvider
+
+ProcessMemoryStrategy -down-> DebugProvider
+ProbeMemoryStrategy -down-> ProbeProvider
+
+note bottom of MemoryAccessStrategy
+  Strategy is selected
+  at session configuration
+  and swapped at runtime.
+end note
+@enduml

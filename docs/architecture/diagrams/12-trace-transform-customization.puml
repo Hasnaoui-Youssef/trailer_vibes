@@ -1,0 +1,67 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Trace Transform — Customization Point Pattern
+
+interface "TraceTransform<T>" as TT <<customization point>> {
+    + {static} Apply(records, ...) : T[]
+}
+
+class "Transform<ReconstructedInstruction>" as T1 {
+    + {static} Apply(records, resolve)
+    --
+    Expands each instruction
+    range record into
+    individual instructions.
+}
+
+class "Transform<FunctionBlock>" as T2 {
+    + {static} Apply(records, resolve)
+    --
+    Groups instructions into
+    function/line blocks.
+    Composes over the
+    instruction transform.
+}
+
+class "Transform<TraceGap>" as T3 {
+    + {static} Apply(records)
+    --
+    Extracts discontinuity
+    markers from the
+    record stream.
+}
+
+TT <|.. T1
+TT <|.. T2
+TT <|.. T3
+
+T2 .right.> T1 : composes
+
+class TraceRecord <<value type>> {
+    kind
+    startAddress
+    endAddress
+    instructionCount
+}
+
+class ReconstructedInstruction <<value type>>
+class FunctionBlock <<value type>>
+class TraceGap <<value type>>
+
+T1 -down-> TraceRecord : consumes
+T1 -down-> ReconstructedInstruction : produces
+T2 -down-> FunctionBlock : produces
+T3 -down-> TraceGap : produces
+
+note bottom of TT
+  Adding a new projection
+  requires only a new
+  specialization. No existing
+  code changes.
+end note
+@enduml

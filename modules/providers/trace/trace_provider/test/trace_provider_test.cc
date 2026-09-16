@@ -123,8 +123,8 @@ int main() {
     std::cout << "trace_provider_test: " << increment->instructions.size() << " executed instructions, "
               << increment->function_blocks.size() << " function blocks, " << increment->gaps.size() << " gaps\n";
 
-    if (increment->instructions.size() != 114) {
-        return Fail("expected 114 executed instructions (frozen oracle), got " +
+    if (increment->instructions.size() != 118) {
+        return Fail("expected 118 executed instructions (frozen oracle), got " +
                     std::to_string(increment->instructions.size()));
     }
     if (increment->function_blocks.size() != 6) {

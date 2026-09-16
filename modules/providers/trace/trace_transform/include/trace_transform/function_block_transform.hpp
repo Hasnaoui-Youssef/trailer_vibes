@@ -83,11 +83,13 @@ inline bool ForceNewLineBlock(const model::SourceLocation &location) {
 // specialization reimplementing its own walk.
 template <>
 struct TraceTransform<model::FunctionBlock> {
+    // Takes already-reconstructed instructions directly, for a caller that
+    // has already run TraceTransform<ReconstructedInstruction> itself and
+    // would otherwise pay for that walk (and every resolve() call in it) a
+    // second time here.
     template <typename Resolve>
-    static std::vector<model::FunctionBlock> Apply(std::span<const trace::TraceRecord> records, Resolve resolve) {
-        const std::vector<model::ReconstructedInstruction> instructions =
-            Transform<model::ReconstructedInstruction>(records, resolve);
-
+    static std::vector<model::FunctionBlock> Apply(std::span<const model::ReconstructedInstruction> instructions,
+                                                     Resolve resolve) {
         std::vector<model::FunctionBlock> functions;
 
         for (const model::ReconstructedInstruction &instruction : instructions) {
@@ -137,6 +139,15 @@ struct TraceTransform<model::FunctionBlock> {
         }
 
         return functions;
+    }
+
+    // Convenience overload for a caller with only TraceRecords in hand -
+    // walks them via TraceTransform<ReconstructedInstruction> first.
+    template <typename Resolve>
+    static std::vector<model::FunctionBlock> Apply(std::span<const trace::TraceRecord> records, Resolve resolve) {
+        return Apply(std::span<const model::ReconstructedInstruction>(
+                         Transform<model::ReconstructedInstruction>(records, resolve)),
+                     resolve);
     }
 };
 

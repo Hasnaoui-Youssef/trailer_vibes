@@ -1,0 +1,25 @@
+{
+  "bytesIn": 192,
+  "decodeMs": 0.201773,
+  "elementsByKind": {
+    "EndOfTrace": 1,
+    "Exception": 1,
+    "InstructionRange": 21,
+    "NoSync": 1,
+    "PeContext": 1,
+    "TraceOn": 1
+  },
+  "functionBlocks": 4,
+  "gaps": 2,
+  "gapsByReason": {
+    "noSync": 1,
+    "traceOn": 1
+  },
+  "instructionsReconstructed": 52,
+  "precomputeMs": 18.673841,
+  "resolveCalls": 103,
+  "traceRecords": 24,
+  "transformBlocksMs": 0.102358,
+  "transformGapsMs": 0.001629,
+  "transformInstructionsMs": 0.104293
+}

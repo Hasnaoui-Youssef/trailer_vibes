@@ -1,0 +1,62 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Provider Encapsulation — Pimpl and Factory Method
+
+class ProbeProvider <<public interface>> {
+    + {static} Create(config) : Result<ProbeProvider>
+    + ReadMemory(selector, address, size)
+    + WriteMemory(selector, address, data)
+    + RunCommand(command)
+    + SubscribeTrace(name, callback)
+    + EnableTrace(name)
+    + DisableTrace(name)
+    + SubscribeTargetState(callback)
+}
+
+class "ProbeProvider::Impl" as Impl <<hidden>> {
+    - commandQueue : CommandQueue
+    - serverThread
+    --
+    All third-party API calls
+    execute on the server thread
+    via the command queue.
+}
+
+class CommandQueue {
+    + Post(callable) : Future
+    + RunSync(callable, timeout) : Result
+    --
+    Thread confinement:
+    all posted work runs on
+    a single dedicated thread.
+}
+
+ProbeProvider *-right-> Impl : opaque pointer
+Impl *-down-> CommandQueue
+
+class Disassembler <<public interface>> {
+    + {static} Create(imagePath) : Result<Disassembler>
+    + InstructionInfoAt(address) : InstructionInfo
+    + LoadSegments() : Segment[]
+}
+
+class "Disassembler::Impl" as DImpl <<hidden>> {
+    All parsing library types
+    hidden behind this boundary.
+}
+
+Disassembler *-right-> DImpl : opaque pointer
+
+note bottom of Impl
+  The opaque pointer hides all
+  third-party types from the
+  public header, enabling modules
+  with incompatible build
+  requirements to coexist.
+end note
+@enduml

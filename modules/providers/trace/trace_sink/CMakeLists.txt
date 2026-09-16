@@ -11,3 +11,7 @@ target_link_libraries(trace_sink PRIVATE
 )
 
 target_compile_features(trace_sink PRIVATE cxx_std_20)
+
+if(TRAILER_BUILD_TESTS)
+    add_subdirectory(test)
+endif()

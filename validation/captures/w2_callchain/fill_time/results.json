@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w2_callchain/build/w2_callchain.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 616839417,
+      "t1": 616850741,
+      "delta": 11324
+    },
+    {
+      "halted": true,
+      "t0": 616850741,
+      "t1": 616856769,
+      "delta": 6028
+    },
+    {
+      "halted": true,
+      "t0": 616856769,
+      "t1": 616861282,
+      "delta": 4513
+    },
+    {
+      "halted": true,
+      "t0": 616861282,
+      "t1": 616864981,
+      "delta": 3699
+    },
+    {
+      "halted": true,
+      "t0": 616864981,
+      "t1": 616868651,
+      "delta": 3670
+    }
+  ]
+}

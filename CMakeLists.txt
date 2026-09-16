@@ -101,6 +101,27 @@ target_link_libraries(trailer-dap
     dap_handlers
 )
 
+add_executable(trailer-trace-replay
+        src/trailer_trace_replay.cc
+)
+
+target_link_libraries(trailer-trace-replay
+    PRIVATE
+    disassembler
+    trace_decoder
+    trace_transform
+    trace_exception_attribution
+    device_xml
+    nlohmann_json::nlohmann_json
+)
+
+target_compile_definitions(trailer-trace-replay PRIVATE
+    TRAILER_SAMPLE_ELF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test_resources/firmware.elf"
+    TRAILER_SAMPLE_TRACE_DUMP_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test_resources/etm_dump.bin"
+)
+
+target_compile_features(trailer-trace-replay PRIVATE cxx_std_23)
+
 set(TRAILER_RESOURCE_INDEX "${CMAKE_CURRENT_SOURCE_DIR}/resources/device_index.tsv")
 set(TRAILER_RESOURCE_CORES "${CMAKE_CURRENT_SOURCE_DIR}/resources/XML/Cores")
 set(TRAILER_RESOURCE_RZONE "${CMAKE_CURRENT_SOURCE_DIR}/resources/XML/Rzone")

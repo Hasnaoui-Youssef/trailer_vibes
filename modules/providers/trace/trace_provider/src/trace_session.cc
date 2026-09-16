@@ -54,11 +54,14 @@ std::expected<DecodedIncrement, std::string> TraceSession::Append(std::span<cons
     const std::vector<trace::TraceRecord> &records = *decode_result;
 
     DecodedIncrement increment;
+    uint64_t executed_count = 0;
     for (model::ReconstructedInstruction &instruction :
          xform::Transform<model::ReconstructedInstruction>(records, impl_->resolve)) {
-        if (instruction.executed) increment.instructions.push_back(std::move(instruction));
+        if (instruction.executed) ++executed_count;
+        increment.instructions.push_back(std::move(instruction));
     }
-    increment.function_blocks = xform::Transform<model::FunctionBlock>(records, impl_->resolve);
+    increment.function_blocks = xform::TraceTransform<model::FunctionBlock>::Apply(
+        std::span<const model::ReconstructedInstruction>(increment.instructions), impl_->resolve);
 
     increment.gaps = xform::Transform<model::TraceGap>(records);
     for (model::TraceGap &gap : increment.gaps) gap.instruction_index += impl_->total_executed_instructions;
@@ -68,7 +71,7 @@ std::expected<DecodedIncrement, std::string> TraceSession::Append(std::span<cons
     }
 
     impl_->capture_count += 1;
-    impl_->total_executed_instructions += increment.instructions.size();
+    impl_->total_executed_instructions += executed_count;
 
     return increment;
 }

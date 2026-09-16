@@ -1,0 +1,73 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Breakpoint Type Hierarchy
+
+abstract class BreakpointBase {
+    # condition : string
+    # hitCondition : string
+    + {abstract} SetCondition()
+    + {abstract} SetHitCondition()
+    + {abstract} ToProtocolBreakpoint()
+    + UpdateBreakpoint(request)
+}
+
+class Breakpoint {
+    # breakpointHandle
+    + SetCondition()
+    + SetHitCondition()
+    + ToProtocolBreakpoint()
+    + SetBreakpoint()
+}
+
+class SourceBreakpoint {
+    - line : integer
+    - column : integer
+    + SetBreakpoint(source)
+}
+
+class FunctionBreakpoint {
+    - functionName : string
+    + SetBreakpoint()
+}
+
+class InstructionBreakpoint {
+    - addressReference : address
+    - offset : integer
+    + SetBreakpoint()
+}
+
+class Watchpoint {
+    - address : address
+    - size : integer
+    + SetWatchpoint()
+}
+
+BreakpointBase <|-- Breakpoint
+BreakpointBase <|-- Watchpoint
+Breakpoint <|-- SourceBreakpoint
+Breakpoint <|-- FunctionBreakpoint
+Breakpoint <|-- InstructionBreakpoint
+
+class BreakpointManager {
+    + SetSourceBreakpoints(source, breakpoints)
+    + SetInstructionBreakpoints(args)
+    + SetDataBreakpoints(args)
+    + GetBreakpointLocations(args)
+}
+
+BreakpointManager o--> "*" SourceBreakpoint
+BreakpointManager o--> "*" FunctionBreakpoint
+BreakpointManager o--> "*" InstructionBreakpoint
+
+note bottom of BreakpointBase
+  Common interface for all
+  breakpoint variants.
+  Watchpoint diverges at
+  the base level.
+end note
+@enduml

@@ -1,0 +1,60 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName "Sans Serif"
+skinparam backgroundColor white
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title Request Handler — Template Method Pattern
+
+interface IRequestHandler <<interface>> {
+    + {abstract} Run(request)
+    + GetSupportedFeatures() : FeatureSet
+}
+
+abstract class BaseRequestHandler {
+    # orchestrator : Orchestrator
+    # context : DebugContext
+    + Run(request)
+    + {abstract} operator()(request)
+    # SendSuccess(response, body)
+    # SendError(error, response)
+}
+
+abstract class "RequestHandler<Args,Resp>" as RH {
+    + operator()(request)
+    # {abstract} Run(args) : Resp
+    # PostRun()
+    --
+    Template Method:
+    1. Parse arguments
+    2. Call Run(args)
+    3. Send response
+    4. Call PostRun() hook
+}
+
+abstract class "DelayedResponseHandler\n<Args,Resp>" as DRH {
+    + operator()(request)
+    # {abstract} Run(args) : Resp
+    --
+    Defers response until
+    configurationDone
+}
+
+class ConcreteHandler {
+    # Run(args) : Resp
+}
+
+IRequestHandler <|.. BaseRequestHandler
+BaseRequestHandler <|-- RH
+BaseRequestHandler <|-- DRH
+RH <|-- ConcreteHandler
+
+note right of RH
+  Invariant steps are
+  defined in the base.
+  Subclasses override
+  only Run() and
+  optionally PostRun().
+end note
+@enduml

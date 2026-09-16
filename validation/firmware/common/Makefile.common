@@ -1,0 +1,104 @@
+# Shared build rules for the validation firmware workloads. A workload's own
+# Makefile sets TARGET, WORKLOAD_C_SOURCES and (optionally) WORKLOAD_EXTRA_HAL
+# before including this file.
+
+COMMON_DIR = ../common
+DUMMY_DIR = ../../../test_resources/stm32h7s3x_dummy
+DRIVERS_DIR = $(DUMMY_DIR)/Drivers
+
+BUILD_DIR = build
+
+CORE_HAL_SOURCES = \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_cortex.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_rcc.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_rcc_ex.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_flash.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_flash_ex.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_gpio.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_dma.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_dma_ex.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_pwr.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_pwr_ex.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal.c \
+$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Src/stm32h7rsxx_hal_exti.c
+
+COMMON_C_SOURCES = \
+$(COMMON_DIR)/Core/Src/stm32h7rsxx_hal_msp.c \
+$(COMMON_DIR)/Core/Src/system_stm32h7rsxx.c \
+$(COMMON_DIR)/Core/Src/sysmem.c \
+$(COMMON_DIR)/Core/Src/syscalls.c \
+$(COMMON_DIR)/Core/Src/board_init.c
+
+C_SOURCES = $(WORKLOAD_C_SOURCES) $(COMMON_C_SOURCES) $(CORE_HAL_SOURCES) $(WORKLOAD_EXTRA_HAL)
+ASM_SOURCES = $(if $(WORKLOAD_ASM_SOURCES),$(WORKLOAD_ASM_SOURCES),$(COMMON_DIR)/startup_stm32h7s3xx.s)
+
+PREFIX = arm-none-eabi-
+ifdef GCC_PATH
+CC = $(GCC_PATH)/$(PREFIX)gcc
+AS = $(GCC_PATH)/$(PREFIX)gcc -x assembler-with-cpp
+CP = $(GCC_PATH)/$(PREFIX)objcopy
+SZ = $(GCC_PATH)/$(PREFIX)size
+else
+CC = $(PREFIX)gcc
+AS = $(PREFIX)gcc -x assembler-with-cpp
+CP = $(PREFIX)objcopy
+SZ = $(PREFIX)size
+endif
+HEX = $(CP) -O ihex
+BIN = $(CP) -O binary -S
+
+CPU = -mcpu=cortex-m7
+FPU = -mfpu=fpv5-d16
+FLOAT-ABI = -mfloat-abi=hard
+MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
+
+C_DEFS = -DUSE_HAL_DRIVER -DSTM32H7S3xx
+
+C_INCLUDES = \
+-I$(COMMON_DIR)/Core/Inc \
+-I$(COMMON_DIR)/hal_extra/Inc \
+-I$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Inc \
+-I$(DRIVERS_DIR)/STM32H7RSxx_HAL_Driver/Inc/Legacy \
+-I$(DRIVERS_DIR)/CMSIS/Device/ST/STM32H7RSxx/Include \
+-I$(DRIVERS_DIR)/CMSIS/Include
+
+OPT = -Og
+
+ASFLAGS = $(MCU) $(OPT) -Wall -fdata-sections -ffunction-sections
+CFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections -g -gdwarf-5
+CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
+
+LDSCRIPT = $(COMMON_DIR)/stm32h7s3xx_flash.ld
+LIBS = -lc -lm -lnosys
+LDFLAGS = $(MCU) -specs=nano.specs -T$(LDSCRIPT) $(LIBS) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref -Wl,--gc-sections
+
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
+
+OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
+vpath %.c $(sort $(dir $(C_SOURCES)))
+OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
+vpath %.s $(sort $(dir $(ASM_SOURCES)))
+
+$(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
+	$(CC) -c $(CFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
+	$(AS) -c $(ASFLAGS) $< -o $@
+
+$(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Makefile
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	$(SZ) $@
+
+$(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
+	$(HEX) $< $@
+
+$(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
+	$(BIN) $< $@
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+-include $(wildcard $(BUILD_DIR)/*.d)

@@ -1,0 +1,35 @@
+{
+  "program": "validation/firmware/w3_branchdense/build/w3_branchdense.elf",
+  "repeats": [
+    {
+      "halted": true,
+      "t0": 620682659,
+      "t1": 620693436,
+      "delta": 10777
+    },
+    {
+      "halted": true,
+      "t0": 620693436,
+      "t1": 620699598,
+      "delta": 6162
+    },
+    {
+      "halted": true,
+      "t0": 620699598,
+      "t1": 620707628,
+      "delta": 8030
+    },
+    {
+      "halted": true,
+      "t0": 620707628,
+      "t1": 620715118,
+      "delta": 7490
+    },
+    {
+      "halted": true,
+      "t0": 620715118,
+      "t1": 620722636,
+      "delta": 7518
+    }
+  ]
+}
