@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENT.md
 
 # Embedded Debugger Extension
 

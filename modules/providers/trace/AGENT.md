@@ -1,4 +1,4 @@
-# Claude.md
+# AGENT.md
 
 # Trace Provider - Trailer
 
