@@ -137,9 +137,19 @@ struct OpenOcdConfiguration {
 bool fromJSON(const llvm::json::Value &, OpenOcdConfiguration &,
               llvm::json::Path);
 
+struct LoadImageConfiguration {
+  bool preverify = false;
+  bool verify = false;
+  bool reset = false;
+};
+bool fromJSON(const llvm::json::Value &, LoadImageConfiguration &,
+              llvm::json::Path);
+
 struct LaunchRequestArguments {
   Configuration configuration;
   bool noDebug = false;
+  bool loadImage = false;
+  LoadImageConfiguration loadImageConfig;
 
   std::vector<std::string> launchCommands;
 

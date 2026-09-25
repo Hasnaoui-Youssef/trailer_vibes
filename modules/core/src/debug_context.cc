@@ -13,11 +13,9 @@
 #include "core/components/watch_manager.hpp"
 #include "core/lldb_utils.hpp"
 #include "dap/dap_error.hpp"
-#include "dap/protocol/protocol_events.hpp"
 #include "dap/protocol/protocol_requests.hpp"
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBProcess.h"
-#include "llvm/Support/Base64.h"
 
 namespace core {
 
@@ -32,11 +30,7 @@ DebugContext::DebugContext()
       watch_manager_(std::make_unique<WatchManager>(*this)),
       device_manager_(std::make_unique<DeviceManager>(*this)) {}
 
-// Defined here (not defaulted in the header) because BreakpointManager,
-// MemoryManager, DisassemblyManager, ModuleManager, DataManager,
-// ExecutionController and TargetManager are only forward-declared there -
-// std::unique_ptr's deleter needs the complete type, which this TU has via
-// the includes above.
+// Defined here Managers are only forward-declared there
 DebugContext::~DebugContext() = default;
 
 llvm::Error DebugContext::CreateOpenOcd(const providers::OpenOcdConfig &config) {

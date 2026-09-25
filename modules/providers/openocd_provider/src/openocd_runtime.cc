@@ -166,14 +166,10 @@ struct command_context* CreateCommandContext() {
     return cmd_ctx;
 }
 
-namespace {
-
 std::string ToTclSafeArg(std::string path) {
     std::ranges::replace(path, '\\', '/');
     return "{" + path + "}";
 }
-
-}  // namespace
 
 std::vector<std::string> RegisterConfigCommands(const OpenOcdConfig& config) {
     std::vector<std::string> commands{};

@@ -1,10 +1,18 @@
 #ifndef TRAILER_PROVIDERS_OPENOCD_PROVIDER_OPENOCD_CONFIG_HPP_
 #define TRAILER_PROVIDERS_OPENOCD_PROVIDER_OPENOCD_CONFIG_HPP_
 
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace providers {
+
+struct OpenOcdLoadImageConfig {
+    std::string path;
+    bool preverify = false;
+    bool verify = false;
+    bool reset = false;
+};
 
 struct OpenOcdConfig {
     std::vector<std::string> script_search_dirs;
@@ -17,6 +25,7 @@ struct OpenOcdConfig {
     std::string tcl_port = "disabled";
     std::string telnet_port = "disabled";
     std::string wakeup_port = "6600";
+    std::optional<OpenOcdLoadImageConfig> load_image;
 };
 
 }  // namespace providers

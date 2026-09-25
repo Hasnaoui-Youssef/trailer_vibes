@@ -3,6 +3,7 @@
 
 #include "openocd_c_api.hpp"
 #include "openocd_provider/openocd_config.hpp"
+#include <string>
 
 extern "C" {
 extern struct command_context* global_cmd_ctx;
@@ -17,6 +18,7 @@ namespace providers {
 // commands. Returns nullptr on failure.
 struct command_context* CreateCommandContext();
 std::vector<std::string> RegisterConfigCommands(const OpenOcdConfig& config);
+std::string ToTclSafeArg(std::string path);
 
 // The "init" Tcl command's body, exposed so the provider can also call it
 // directly without going through Tcl.

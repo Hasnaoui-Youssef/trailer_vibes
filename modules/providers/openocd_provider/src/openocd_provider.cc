@@ -43,6 +43,20 @@ std::string ResolveLogFilePath(const std::string& configured_path) {
     return (base_dir / path).string();
 }
 
+std::expected<std::string, std::string> BuildProgramCommand(const OpenOcdLoadImageConfig& image) {
+    if (image.path.empty()) return std::unexpected("loadImage requires a non-empty program path");
+    // OpenOCD's program proc wraps the filename in braces and evaluates it
+    // again, so braces in the filename cannot be passed through safely.
+    if (image.path.find_first_of("{}\r\n") != std::string::npos || image.path.find('\0') != std::string::npos)
+        return std::unexpected("program path contains characters unsupported by OpenOCD's program command");
+
+    std::string command = "program " + ToTclSafeArg(image.path);
+    if (image.preverify) command += " preverify";
+    if (image.verify) command += " verify";
+    if (image.reset) command += " reset";
+    return command;
+}
+
 std::atomic<bool> g_instance_alive{false};
 
 void RunGuardedTrampoline(void* raw) { (*static_cast<std::function<void()>*>(raw))(); }
@@ -250,10 +264,21 @@ std::expected<OpenOcdProvider, std::string> OpenOcdProvider::Create(const OpenOc
     if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during server_init()");
     if (retval != ERROR_OK) return std::unexpected("server_init() failed");
 
-    if (config.init_at_startup) {
+    // OpenOCD's program proc calls init itself. Running our init sequence
+    // first makes its second "target init" fail after target examination.
+    if (config.init_at_startup && !config.load_image) {
         ok = RunGuarded([&]() { retval = RunInit(cmd_ctx); }, &exit_code);
         if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") during init");
         if (retval != ERROR_OK) return std::unexpected("the 'init' sequence failed");
+    }
+
+    if (config.load_image) {
+        std::expected<std::string, std::string> command = BuildProgramCommand(*config.load_image);
+        if (!command) return std::unexpected(command.error());
+        ok = RunGuarded([&]() { retval = command_run_line(cmd_ctx, command->data()); }, &exit_code);
+        if (!ok) return std::unexpected("openocd_exit(" + std::to_string(exit_code) + ") while programming image");
+        if (retval != ERROR_OK)
+            return std::unexpected("failed to program image '" + config.load_image->path + "'");
     }
 
     auto queue_start = provider.impl_->queue.Start(cmd_ctx, config.wakeup_port);

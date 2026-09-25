@@ -53,10 +53,6 @@ class CommandQueue {
         return future;
     }
 
-    // Synchronous convenience: the shape every OpenOcdProvider public method
-    // actually wants (see Phase 3 of the plan - futures at this layer,
-    // synchronous wrappers above it).
-    //
     // Bounded by timeout: if server_loop hasn't run the task in time, this
     // returns nullopt (or false for a void Fn) instead of blocking forever.
     // fn must not capture the caller's stack by reference - it may still be

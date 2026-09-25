@@ -40,7 +40,9 @@ llvm::Error CreateRunLLDBCommandsErrorMessage(llvm::StringRef category) {
       llvm::formatv("Failed to run {0} commands. See the Debug Console for more details.", category).str());
 }
 
-providers::OpenOcdConfig ToOpenOcdConfig(const protocol::OpenOcdConfiguration &config) {
+providers::OpenOcdConfig ToOpenOcdConfig(
+    const protocol::OpenOcdConfiguration &config, const std::string &program,
+    const std::optional<protocol::LoadImageConfiguration> &load_image_config) {
   providers::OpenOcdConfig result;
   result.script_search_dirs = config.scriptSearchDirs;
   result.config_files = config.configFiles;
@@ -50,6 +52,11 @@ providers::OpenOcdConfig ToOpenOcdConfig(const protocol::OpenOcdConfiguration &c
   result.gdb_port = config.gdbPort;
   result.tcl_port = config.tclPort;
   result.telnet_port = config.telnetPort;
+  if (load_image_config) {
+    result.load_image = providers::OpenOcdLoadImageConfig{
+        program, load_image_config->preverify, load_image_config->verify,
+        load_image_config->reset};
+  }
   return result;
 }
 
@@ -349,13 +356,17 @@ llvm::Error TargetManager::Launch(const dap::protocol::LaunchRequestArguments &a
     SetConfiguration(arguments.configuration, /*is_attach=*/false);
     last_launch_request = arguments;
 
-    if (llvm::Error err = m_context.CreateOpenOcd(ToOpenOcdConfig(arguments.openocd)))
+    std::optional<protocol::LoadImageConfiguration> load_image_config;
+    if (arguments.loadImage)
+      load_image_config = arguments.loadImageConfig;
+    if (llvm::Error err = m_context.CreateOpenOcd(
+            ToOpenOcdConfig(arguments.openocd, arguments.configuration.program, load_image_config)))
       return err;
     m_context.Memory().SetStrategy(std::make_unique<OpenOcdMemoryStrategy>(*m_context.OpenOcd()));
 
     // This is a hack for loading DWARF in .o files on Mac where the .o files
     // in the debug map of the main executable have relative paths which
-    // require the lldb-dap binary to have its working directory set to that
+    // require the dap binary to have its working directory set to that
     // relative root for the .o files in order to be able to load debug info.
     if (!configuration.debuggerRoot.empty())
       llvm::sys::fs::set_current_path(configuration.debuggerRoot);
@@ -384,8 +395,6 @@ llvm::Error TargetManager::Launch(const dap::protocol::LaunchRequestArguments &a
     if (llvm::Error err = ConnectToGdbRemote("127.0.0.1", arguments.openocd.gdbPort, arguments.configuration.timeout))
       return err;
 
-    // Trace components come from the sourced OpenOCD config, not every board
-    // has them - absence is not a Launch failure, just no trace this session.
     if (llvm::Error err = m_context.CreateTrace())
       m_context.SendOutput(OutputCategory::Console, "trace unavailable: " + llvm::toString(std::move(err)));
     m_context.Emit(TraceStatusEvent{m_context.TraceStatus()});
@@ -486,7 +495,7 @@ llvm::Error TargetManager::InitializeDebugger() {
   debugger.SetErrorFile(lldb::SBFile(stderr, /*transfer_ownership=*/false));
 
   // Disable LLDB's built-in debuginfod client: CreateTarget() otherwise
-  // blocks (observed: minutes, not seconds) on an outbound HTTPS lookup to a
+  // blocks on an outbound HTTPS lookup to a
   // debuginfod server when a target's debug info is incomplete, which real
   // embedded firmware images with partial/no debug info hit constantly, and
   // which isn't reachable in every network environment this adapter runs in

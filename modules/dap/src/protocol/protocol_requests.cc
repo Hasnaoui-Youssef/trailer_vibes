@@ -251,6 +251,8 @@ bool fromJSON(const json::Value &Params, LaunchRequestArguments &LRA,
   json::ObjectMapper O(Params, P);
   bool success = O && fromJSON(Params, LRA.configuration, P) &&
                  O.mapOptional("noDebug", LRA.noDebug) &&
+                 O.mapOptional("loadImage", LRA.loadImage) &&
+                 O.mapOptional("loadImageConfig", LRA.loadImageConfig) &&
                  O.mapOptional("launchCommands", LRA.launchCommands) &&
                  O.mapOptional("openocd", LRA.openocd);
   if (!success)
@@ -260,6 +262,14 @@ bool fromJSON(const json::Value &Params, LaunchRequestArguments &LRA,
     return false;
   }
   return true;
+}
+
+bool fromJSON(const json::Value &Params, LoadImageConfiguration &LIC,
+              json::Path P) {
+  json::ObjectMapper O(Params, P);
+  return O && O.mapOptional("preverify", LIC.preverify) &&
+         O.mapOptional("verify", LIC.verify) &&
+         O.mapOptional("reset", LIC.reset);
 }
 
 bool fromJSON(const llvm::json::Value &Params, DAPSession &Ses,
